@@ -1,68 +1,136 @@
 package com.livetranslate.app.audio
 
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.ArrayDeque
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Mixes two 16 kHz mono PCM16 LE streams (media + mic) by averaging samples.
- * Soft-starts with ring-ish queues; drops lag when one side runs far ahead.
+ * Queues whole chunks (no per-byte boxing). Drops oldest samples when one side lags.
  */
 class PcmMixer(
     private val onMixed: (ByteArray) -> Unit,
 ) {
-    private val mediaQ = ConcurrentLinkedQueue<Byte>()
-    private val micQ = ConcurrentLinkedQueue<Byte>()
+    private val lock = Any()
+    private val mediaQ = ArrayDeque<ByteArray>()
+    private val micQ = ArrayDeque<ByteArray>()
+    private var mediaOff = 0
+    private var micOff = 0
+    private var mediaBytes = 0
+    private var micBytes = 0
     private val closed = AtomicBoolean(false)
 
-    fun offerMedia(chunk: ByteArray) {
-        if (closed.get()) return
-        chunk.forEach { mediaQ.offer(it) }
-        drain()
-    }
+    fun offerMedia(chunk: ByteArray) = offer(chunk, media = true)
 
-    fun offerMic(chunk: ByteArray) {
-        if (closed.get()) return
-        chunk.forEach { micQ.offer(it) }
-        drain()
-    }
+    fun offerMic(chunk: ByteArray) = offer(chunk, media = false)
 
     fun close() {
         closed.set(true)
-        mediaQ.clear()
-        micQ.clear()
+        synchronized(lock) {
+            mediaQ.clear()
+            micQ.clear()
+            mediaOff = 0
+            micOff = 0
+            mediaBytes = 0
+            micBytes = 0
+        }
+    }
+
+    private fun offer(chunk: ByteArray, media: Boolean) {
+        if (closed.get() || chunk.isEmpty()) return
+        synchronized(lock) {
+            if (closed.get()) return
+            if (media) {
+                mediaQ.addLast(chunk)
+                mediaBytes += chunk.size
+                trim(media = true)
+            } else {
+                micQ.addLast(chunk)
+                micBytes += chunk.size
+                trim(media = false)
+            }
+            drain()
+        }
+    }
+
+    private fun trim(media: Boolean) {
+        var bytes = if (media) mediaBytes else micBytes
+        var off = if (media) mediaOff else micOff
+        val q = if (media) mediaQ else micQ
+        while (bytes > MAX_QUEUE_BYTES && q.isNotEmpty()) {
+            val head = q.first()
+            val remain = head.size - off
+            if (bytes - remain >= MAX_QUEUE_BYTES) {
+                q.removeFirst()
+                bytes -= remain
+                off = 0
+            } else {
+                var drop = bytes - MAX_QUEUE_BYTES
+                if (drop % 2 != 0) drop++
+                drop = drop.coerceAtMost(remain)
+                off += drop
+                bytes -= drop
+                if (off >= head.size) {
+                    q.removeFirst()
+                    off = 0
+                }
+                break
+            }
+        }
+        if (media) {
+            mediaBytes = bytes
+            mediaOff = off
+        } else {
+            micBytes = bytes
+            micOff = off
+        }
     }
 
     private fun drain() {
-        // Keep queues from growing unbounded (~1s @ 16k mono 16bit = 32000 bytes)
-        trim(mediaQ, MAX_QUEUE_BYTES)
-        trim(micQ, MAX_QUEUE_BYTES)
-
-        val frames = minOf(mediaQ.size / 2, micQ.size / 2)
+        val frames = minOf(mediaBytes, micBytes) / 2
         if (frames <= 0) return
         val out = ByteArray(frames * 2)
         var oi = 0
         repeat(frames) {
-            val m0 = mediaQ.poll()?.toInt()?.and(0xFF) ?: return
-            val m1 = mediaQ.poll()?.toInt() ?: return
-            val n0 = micQ.poll()?.toInt()?.and(0xFF) ?: return
-            val n1 = micQ.poll()?.toInt() ?: return
-            val ms = (m1 shl 8) or m0
-            val ns = (n1 shl 8) or n0
-            val mSigned = ms.toShort().toInt()
-            val nSigned = ns.toShort().toInt()
-            val mixed = ((mSigned + nSigned) / 2)
+            val mixed = ((readSample(media = true) + readSample(media = false)) / 2)
                 .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
             out[oi++] = (mixed and 0xFF).toByte()
             out[oi++] = ((mixed shr 8) and 0xFF).toByte()
         }
-        if (oi > 0) onMixed(if (oi == out.size) out else out.copyOf(oi))
+        if (oi > 0 && !closed.get()) onMixed(out)
     }
 
-    private fun trim(q: ConcurrentLinkedQueue<Byte>, max: Int) {
-        while (q.size > max) {
-            q.poll()
-            q.poll() // drop whole sample when possible
+    private fun readSample(media: Boolean): Int {
+        val lo = readByte(media).toInt() and 0xFF
+        val hi = readByte(media).toInt()
+        return ((hi shl 8) or lo).toShort().toInt()
+    }
+
+    private fun readByte(media: Boolean): Byte {
+        val q = if (media) mediaQ else micQ
+        var off = if (media) mediaOff else micOff
+        while (q.isNotEmpty()) {
+            val head = q.first()
+            if (off < head.size) {
+                val b = head[off]
+                off++
+                if (media) {
+                    mediaOff = off
+                    mediaBytes--
+                } else {
+                    micOff = off
+                    micBytes--
+                }
+                if (off >= head.size) {
+                    q.removeFirst()
+                    if (media) mediaOff = 0 else micOff = 0
+                }
+                return b
+            }
+            q.removeFirst()
+            off = 0
+            if (media) mediaOff = 0 else micOff = 0
         }
+        return 0
     }
 
     companion object {

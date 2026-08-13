@@ -245,7 +245,10 @@ class LiveTranslateClient {
                 ),
             )
             .toString()
-        ws.send(msg)
+        val ok = ws.send(msg)
+        if (!ok) {
+            Log.w(TAG, "sendPcm dropped (socket closed or send queue full)")
+        }
     }
 
     fun close() {
@@ -277,11 +280,17 @@ class LiveTranslateClient {
 
     private fun fail(message: String) {
         _connectionState.value = ConnectionState.Failed(message)
-        scope.launch { _events.emit(LiveEvent.Error(message)) }
+        emitEvent(LiveEvent.Error(message))
     }
 
     private fun emitDebug(message: String) {
-        scope.launch { _events.emit(LiveEvent.Debug(message)) }
+        emitEvent(LiveEvent.Debug(message))
+    }
+
+    private fun emitEvent(event: LiveEvent) {
+        if (!_events.tryEmit(event)) {
+            scope.launch { _events.emit(event) }
+        }
     }
 
     private fun handleMessage(text: String) {
@@ -329,15 +338,13 @@ class LiveTranslateClient {
             if (input != null) {
                 val t = input.optString("text")
                 if (t.isNotBlank()) {
-                    scope.launch {
-                        _events.emit(
-                            LiveEvent.InputTranscript(
-                                text = t,
-                                languageCode = input.optStringOrNull("languageCode")
-                                    ?: input.optStringOrNull("language_code"),
-                            ),
-                        )
-                    }
+                    emitEvent(
+                        LiveEvent.InputTranscript(
+                            text = t,
+                            languageCode = input.optStringOrNull("languageCode")
+                                ?: input.optStringOrNull("language_code"),
+                        ),
+                    )
                 }
             }
 
@@ -346,15 +353,13 @@ class LiveTranslateClient {
             if (output != null) {
                 val t = output.optString("text")
                 if (t.isNotBlank()) {
-                    scope.launch {
-                        _events.emit(
-                            LiveEvent.OutputTranscript(
-                                text = t,
-                                languageCode = output.optStringOrNull("languageCode")
-                                    ?: output.optStringOrNull("language_code"),
-                            ),
-                        )
-                    }
+                    emitEvent(
+                        LiveEvent.OutputTranscript(
+                            text = t,
+                            languageCode = output.optStringOrNull("languageCode")
+                                ?: output.optStringOrNull("language_code"),
+                        ),
+                    )
                 }
             }
 
@@ -372,7 +377,7 @@ class LiveTranslateClient {
                     val mime = inline.optStringOrNull("mimeType")
                         ?: inline.optStringOrNull("mime_type")
                     val bytes = Base64.decode(dataB64, Base64.DEFAULT)
-                    scope.launch { _events.emit(LiveEvent.AudioChunk(bytes, mime)) }
+                    emitEvent(LiveEvent.AudioChunk(bytes, mime))
                 }
             }
         } catch (e: Exception) {
