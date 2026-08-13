@@ -24,11 +24,14 @@ import com.livetranslate.app.data.UserSettings
 import com.livetranslate.app.live.LiveTranslateClient
 import com.livetranslate.app.overlay.SubtitleOverlayController
 import com.livetranslate.app.ui.main.MainActivity
+import com.livetranslate.app.util.TranscriptBuffer
+import com.livetranslate.app.util.TranscriptLineBreaker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -55,11 +58,17 @@ class SubtitleSessionService : Service() {
     private var currentSettings: UserSettings = UserSettings()
     private var audioSourceMode: AudioSourceMode = AudioSourceMode.MEDIA
     private var captureStarted = false
+    private var stopping = false
 
     private var accumulatedInput = StringBuilder()
     private var accumulatedOutput = StringBuilder()
     private var fullInput = StringBuilder()
     private var fullOutput = StringBuilder()
+
+    private var lastPreviewAtMs = 0L
+    private var pendingPreviewInput: String? = null
+    private var pendingPreviewOutput: String? = null
+    private var previewFlushJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -78,7 +87,6 @@ class SubtitleSessionService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 stopEverything("已停止")
-                return START_NOT_STICKY
             }
             ACTION_START -> {
                 val modeName = intent.getStringExtra(EXTRA_AUDIO_SOURCE)
@@ -94,18 +102,24 @@ class SubtitleSessionService : Service() {
                     if (data == null || resultCode != Activity.RESULT_OK) {
                         SessionBus.setStatus(SessionBus.Status.Error, "录屏授权失败")
                         stopSelf()
-                        return START_NOT_STICKY
+                    } else {
+                        startSession(resultCode, data)
                     }
-                    startSession(resultCode, data)
                 } else {
                     startSession(resultCode = null, data = null)
                 }
             }
+            else -> {
+                // Sticky restart or unknown action: must not sit without startForeground.
+                ensureForegroundNotification()
+                stopSelf()
+            }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun startSession(resultCode: Int?, data: Intent?) {
+        stopping = false
         SessionBus.setStatus(SessionBus.Status.Starting, "正在启动…")
         SessionBus.clearExport()
         accumulatedInput.clear()
@@ -113,6 +127,11 @@ class SubtitleSessionService : Service() {
         fullInput.clear()
         fullOutput.clear()
         captureStarted = false
+        lastPreviewAtMs = 0L
+        pendingPreviewInput = null
+        pendingPreviewOutput = null
+        previewFlushJob?.cancel()
+        previewFlushJob = null
         startAsForeground()
 
         val app = application as LiveTranslateApp
@@ -172,7 +191,10 @@ class SubtitleSessionService : Service() {
                                 startCapturePipeline(client)
                             }
                             is LiveTranslateClient.ConnectionState.Failed -> {
-                                SessionBus.setStatus(SessionBus.Status.Error, state.message)
+                                stopEverything(state.message, error = true)
+                            }
+                            is LiveTranslateClient.ConnectionState.Closed -> {
+                                stopEverything("连接已断开", error = true)
                             }
                             else -> Unit
                         }
@@ -187,16 +209,16 @@ class SubtitleSessionService : Service() {
                         is LiveTranslateClient.LiveEvent.InputTranscript -> {
                             appendTranscript(accumulatedInput, event.text)
                             appendFull(fullInput, event.text)
-                            val text = accumulatedInput.toString()
-                            overlay?.updateTranscripts(input = text, output = null)
-                            SessionBus.setPreview(input = text)
+                            val display = TranscriptLineBreaker.format(accumulatedInput.toString())
+                            overlay?.updateTranscripts(input = display, output = null)
+                            publishPreview(input = display)
                         }
                         is LiveTranslateClient.LiveEvent.OutputTranscript -> {
                             appendTranscript(accumulatedOutput, event.text)
                             appendFull(fullOutput, event.text)
-                            val text = accumulatedOutput.toString()
-                            overlay?.updateTranscripts(input = null, output = text)
-                            SessionBus.setPreview(output = text)
+                            val display = TranscriptLineBreaker.format(accumulatedOutput.toString())
+                            overlay?.updateTranscripts(input = null, output = display)
+                            publishPreview(output = display)
                         }
                         is LiveTranslateClient.LiveEvent.AudioChunk -> {
                             if (currentSettings.playTranslatedAudio) {
@@ -204,7 +226,7 @@ class SubtitleSessionService : Service() {
                             }
                         }
                         is LiveTranslateClient.LiveEvent.Error -> {
-                            SessionBus.setStatus(SessionBus.Status.Error, event.message)
+                            stopEverything(event.message, error = true)
                         }
                         is LiveTranslateClient.LiveEvent.Debug -> {
                             Log.d(TAG, event.message)
@@ -215,12 +237,19 @@ class SubtitleSessionService : Service() {
 
             settingsJob = scope.launch {
                 app.settingsRepository.settings.collectLatest { s ->
-                    val prevPlay = currentSettings.playTranslatedAudio
+                    val prev = currentSettings
                     currentSettings = s
+                    val appearanceOrAudioChanged =
+                        prev.fontSizeSp != s.fontSizeSp ||
+                            prev.backgroundAlpha != s.backgroundAlpha ||
+                            prev.bilingual != s.bilingual ||
+                            prev.playTranslatedAudio != s.playTranslatedAudio ||
+                            prev.translatedVolume != s.translatedVolume
+                    if (!appearanceOrAudioChanged) return@collectLatest
                     overlay?.updateSettings(s)
                     player.setEnabled(s.playTranslatedAudio)
                     player.setVolume(s.translatedVolume)
-                    if (prevPlay && !s.playTranslatedAudio) {
+                    if (prev.playTranslatedAudio && !s.playTranslatedAudio) {
                         Log.i(TAG, "translated audio disabled")
                     }
                 }
@@ -285,45 +314,40 @@ class SubtitleSessionService : Service() {
     }
 
     private fun appendTranscript(buffer: StringBuilder, chunk: String) {
-        if (chunk.length >= buffer.length && chunk.startsWith(buffer.toString())) {
-            buffer.clear()
-            buffer.append(chunk)
-        } else if (buffer.endsWith(chunk)) {
-            // ignore
-        } else {
-            if (buffer.isNotEmpty() && !buffer.last().isWhitespace() && chunk.isNotEmpty() &&
-                !chunk.first().isWhitespace()
-            ) {
-                buffer.append(' ')
-            }
-            buffer.append(chunk)
-        }
-        if (buffer.length > 800) {
-            buffer.delete(0, buffer.length - 800)
-        }
+        TranscriptBuffer.append(buffer, chunk, maxChars = 800)
     }
 
     private fun appendFull(buffer: StringBuilder, chunk: String) {
-        // Prefer cumulative server rewrites when present
-        if (chunk.length >= buffer.length && buffer.isNotEmpty() && chunk.startsWith(buffer.toString())) {
-            buffer.clear()
-            buffer.append(chunk)
+        TranscriptBuffer.append(buffer, chunk, maxChars = 200_000)
+    }
+
+    private fun publishPreview(input: String? = null, output: String? = null) {
+        if (input != null) pendingPreviewInput = input
+        if (output != null) pendingPreviewOutput = output
+        val now = System.currentTimeMillis()
+        val wait = PREVIEW_THROTTLE_MS - (now - lastPreviewAtMs)
+        if (wait <= 0L) {
+            flushPreview()
             return
         }
-        if (buffer.endsWith(chunk)) return
-        if (buffer.isNotEmpty() && !buffer.last().isWhitespace() && chunk.isNotEmpty() &&
-            !chunk.first().isWhitespace()
-        ) {
-            buffer.append(' ')
-        }
-        buffer.append(chunk)
-        // Cap export size ~200k chars
-        if (buffer.length > 200_000) {
-            buffer.delete(0, buffer.length - 200_000)
+        if (previewFlushJob?.isActive == true) return
+        previewFlushJob = scope.launch {
+            delay(wait)
+            flushPreview()
         }
     }
 
-    private fun startAsForeground() {
+    private fun flushPreview() {
+        previewFlushJob?.cancel()
+        previewFlushJob = null
+        if (pendingPreviewInput == null && pendingPreviewOutput == null) return
+        lastPreviewAtMs = System.currentTimeMillis()
+        SessionBus.setPreview(input = pendingPreviewInput, output = pendingPreviewOutput)
+        pendingPreviewInput = null
+        pendingPreviewOutput = null
+    }
+
+    private fun buildNotification(): Notification {
         val stopIntent = Intent(this, SubtitleSessionService::class.java).setAction(ACTION_STOP)
         val stopPi = PendingIntent.getService(
             this,
@@ -337,7 +361,7 @@ class SubtitleSessionService : Service() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val notification: Notification = NotificationCompat.Builder(this, LiveTranslateApp.CHANNEL_SUBTITLE)
+        return NotificationCompat.Builder(this, LiveTranslateApp.CHANNEL_SUBTITLE)
             .setContentTitle(getString(R.string.notification_subtitle_running))
             .setContentText(getString(R.string.notification_subtitle_text))
             .setSmallIcon(R.mipmap.ic_launcher)
@@ -345,7 +369,10 @@ class SubtitleSessionService : Service() {
             .addAction(0, getString(R.string.action_stop), stopPi)
             .setOngoing(true)
             .build()
+    }
 
+    private fun startAsForeground() {
+        val notification = buildNotification()
         val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             when (audioSourceMode) {
                 AudioSourceMode.MEDIA ->
@@ -367,12 +394,38 @@ class SubtitleSessionService : Service() {
         }
     }
 
-    private fun stopEverything(message: String) {
+    /** Used when the process is restarted with a null intent so we still hit startForeground. */
+    private fun ensureForegroundNotification() {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun stopEverything(message: String, error: Boolean = false) {
+        if (stopping) return
+        stopping = true
+        flushPreview()
         val inFull = fullInput.toString()
         val outFull = fullOutput.toString()
         if (inFull.isNotBlank() || outFull.isNotBlank()) {
             SessionBus.markSessionFinished(inFull, outFull, message)
-        } else {
+        }
+        if (error) {
+            SessionBus.setStatus(SessionBus.Status.Error, message)
+        } else if (inFull.isBlank() && outFull.isBlank()) {
             SessionBus.setStatus(SessionBus.Status.Stopped, message)
         }
         mediaCapturer?.stop()
@@ -419,6 +472,7 @@ class SubtitleSessionService : Service() {
     companion object {
         private const val TAG = "SubtitleSessionService"
         private const val NOTIFICATION_ID = 42
+        private const val PREVIEW_THROTTLE_MS = 200L
         const val ACTION_START = "com.livetranslate.app.action.START_SUBTITLE"
         const val ACTION_STOP = "com.livetranslate.app.action.STOP_SUBTITLE"
         const val EXTRA_RESULT_CODE = "result_code"

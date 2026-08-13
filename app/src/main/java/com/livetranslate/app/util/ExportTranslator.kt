@@ -31,13 +31,19 @@ object ExportTranslator {
             appendLine()
             appendLine("## 原文")
             appendLine()
-            appendLine(sourceText.ifBlank { "（无）" }.trim())
+            appendLine(formatExportBody(sourceText))
             appendLine()
             appendLine("## 译文")
             appendLine()
-            appendLine(translationText.ifBlank { "（无）" }.trim())
+            appendLine(formatExportBody(translationText))
             appendLine()
         }
+    }
+
+    private fun formatExportBody(text: String): String {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return "（无）"
+        return TranscriptLineBreaker.formatForMarkdown(trimmed)
     }
 
     /** e.g. 7月14日-22:35-翻译结果.md */

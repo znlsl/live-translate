@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Captures microphone PCM and resamples to 16 kHz mono LE for Live Translate.
@@ -66,13 +68,25 @@ class MicAudioCapturer(
 
     fun stop() {
         running = false
-        captureJob?.cancel()
+        val record = audioRecord
+        val job = captureJob
         captureJob = null
         try {
-            audioRecord?.stop()
+            record?.stop()
         } catch (_: Exception) {
         }
-        audioRecord?.release()
+        job?.cancel()
+        if (job != null) {
+            runCatching {
+                runBlocking {
+                    withTimeoutOrNull(400) { job.join() }
+                }
+            }
+        }
+        try {
+            record?.release()
+        } catch (_: Exception) {
+        }
         audioRecord = null
     }
 

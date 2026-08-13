@@ -539,11 +539,13 @@ class SubtitleOverlayController(
                             max(0, screenH - params.height),
                         )
                         windowManager.updateViewLayout(root, params)
-                        persistGeometry()
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         clampAndApply(persist = true, reason = "move-up")
+                        // Persist once per gesture. Writing DataStore on MOVE
+                        // retriggers settings collection and fights the drag.
+                        persistGeometry()
                         true
                     }
                     else -> false
@@ -588,11 +590,11 @@ class SubtitleOverlayController(
                         params.x = safeCoerce(params.x, 0, max(0, screenW - params.width))
                         params.y = safeCoerce(params.y, 0, max(0, screenH - params.height))
                         windowManager.updateViewLayout(root, params)
-                        persistGeometry()
                         true
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         clampAndApply(persist = true, reason = "resize-up")
+                        persistGeometry()
                         true
                     }
                     else -> false
