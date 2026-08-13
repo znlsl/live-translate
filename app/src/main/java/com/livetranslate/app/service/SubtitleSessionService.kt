@@ -24,6 +24,7 @@ import com.livetranslate.app.data.UserSettings
 import com.livetranslate.app.live.LiveTranslateClient
 import com.livetranslate.app.overlay.SubtitleOverlayController
 import com.livetranslate.app.ui.main.MainActivity
+import com.livetranslate.app.util.TranscriptBuffer
 import com.livetranslate.app.util.TranscriptLineBreaker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -313,46 +314,11 @@ class SubtitleSessionService : Service() {
     }
 
     private fun appendTranscript(buffer: StringBuilder, chunk: String) {
-        if (chunk.length >= buffer.length && chunk.startsWith(buffer)) {
-            buffer.clear()
-            buffer.append(chunk)
-        } else if (buffer.endsWith(chunk)) {
-            // ignore
-        } else {
-            if (buffer.isNotEmpty() && !buffer.last().isWhitespace() && chunk.isNotEmpty() &&
-                !chunk.first().isWhitespace()
-            ) {
-                buffer.append(' ')
-            }
-            buffer.append(chunk)
-        }
-        if (buffer.length > 800) {
-            var cut = buffer.length - 800
-            if (cut < buffer.length && buffer[cut].isLowSurrogate()) cut++
-            if (cut > 0) buffer.delete(0, cut)
-        }
+        TranscriptBuffer.append(buffer, chunk, maxChars = 800)
     }
 
     private fun appendFull(buffer: StringBuilder, chunk: String) {
-        // Prefer cumulative server rewrites when present
-        if (chunk.length >= buffer.length && buffer.isNotEmpty() && chunk.startsWith(buffer)) {
-            buffer.clear()
-            buffer.append(chunk)
-            return
-        }
-        if (buffer.endsWith(chunk)) return
-        if (buffer.isNotEmpty() && !buffer.last().isWhitespace() && chunk.isNotEmpty() &&
-            !chunk.first().isWhitespace()
-        ) {
-            buffer.append(' ')
-        }
-        buffer.append(chunk)
-        // Cap export size ~200k chars
-        if (buffer.length > 200_000) {
-            var cut = buffer.length - 200_000
-            if (cut < buffer.length && buffer[cut].isLowSurrogate()) cut++
-            if (cut > 0) buffer.delete(0, cut)
-        }
+        TranscriptBuffer.append(buffer, chunk, maxChars = 200_000)
     }
 
     private fun publishPreview(input: String? = null, output: String? = null) {

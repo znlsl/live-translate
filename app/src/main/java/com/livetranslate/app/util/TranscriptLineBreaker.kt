@@ -28,11 +28,12 @@ object TranscriptLineBreaker {
 
     fun format(text: String, minLineChars: Int = DEFAULT_MIN_LINE_CHARS): String {
         if (text.isEmpty() || minLineChars <= 0) return text
-        val sb = StringBuilder(text.length + 8)
+        val cleaned = TranscriptBuffer.collapseCjkInteriorSpaces(text)
+        val sb = StringBuilder(cleaned.length + 8)
         var i = 0
         var lineLen = 0
-        while (i < text.length) {
-            val c = text[i]
+        while (i < cleaned.length) {
+            val c = cleaned[i]
             if (c == '\n') {
                 sb.append('\n')
                 lineLen = 0
@@ -40,16 +41,16 @@ object TranscriptLineBreaker {
                 continue
             }
 
-            val end = sentenceEndExtent(text, i)
+            val end = sentenceEndExtent(cleaned, i)
             if (end != null) {
-                sb.append(text, i, end + 1)
+                sb.append(cleaned, i, end + 1)
                 lineLen += end - i + 1
                 i = end + 1
-                val hasSpace = i < text.length && text[i] == ' '
+                val hasSpace = i < cleaned.length && cleaned[i] == ' '
                 val afterSpace = if (hasSpace) i + 1 else i
                 val canBreak = lineLen >= minLineChars &&
-                    afterSpace < text.length &&
-                    text[afterSpace] != '\n' &&
+                    afterSpace < cleaned.length &&
+                    cleaned[afterSpace] != '\n' &&
                     sb.lastOrNull() != '\n'
                 if (canBreak) {
                     if (hasSpace) i++
