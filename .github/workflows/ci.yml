@@ -1,12 +1,25 @@
+# Debug APK: every branch push, every PR, or Actions → CI → Run workflow.
+# After a run finishes, download LiveTranslate-debug.apk from Artifacts.
 name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - "**"
   pull_request:
-    branches: [main, master]
-  # Actions 页可选手动触发（可指定任意分支）
   workflow_dispatch:
+    inputs:
+      run_tests:
+        description: Also run unit tests
+        type: boolean
+        default: true
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -23,6 +36,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -37,12 +51,37 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Unit tests
+        if: github.event_name != 'workflow_dispatch' || inputs.run_tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/LiveTranslate-debug.apk
+          ls -lh dist/LiveTranslate-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: LiveTranslate-debug
+          path: dist/LiveTranslate-debug.apk
           if-no-files-found: error
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Debug APK"
+            echo
+            echo "- Branch: \`${{ github.ref_name }}\`"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Trigger: \`${{ github.event_name }}\`"
+            echo
+            echo "Open this run → **Artifacts** → **LiveTranslate-debug** to download \`LiveTranslate-debug.apk\`."
+            echo
+            echo "To run again: Actions → **CI** → **Run workflow** → pick this branch."
+          } >> "$GITHUB_STEP_SUMMARY"
