@@ -226,9 +226,6 @@ class MainActivity : ComponentActivity() {
                                 settings = settings,
                                 session = session,
                                 exportMessage = exportMessage,
-                                onSourceLanguage = { code ->
-                                    scope.launch { subtitleVm.setSourceLanguage(code) }
-                                },
                                 onTargetLanguage = { code ->
                                     scope.launch { subtitleVm.setTargetLanguage(code) }
                                 },

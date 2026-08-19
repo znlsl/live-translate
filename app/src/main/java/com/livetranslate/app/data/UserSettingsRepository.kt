@@ -18,7 +18,6 @@ class UserSettingsRepository(private val context: Context) {
     private object Keys {
         val endpoint = stringPreferencesKey("endpoint")
         val modelId = stringPreferencesKey("model_id")
-        val sourceLanguage = stringPreferencesKey("source_language")
         val targetLanguage = stringPreferencesKey("target_language")
         val fontSizeSp = floatPreferencesKey("font_size_sp")
         val backgroundAlpha = floatPreferencesKey("background_alpha")
@@ -41,7 +40,6 @@ class UserSettingsRepository(private val context: Context) {
             val next = transform(prefs.toSettings())
             prefs[Keys.endpoint] = next.endpoint
             prefs[Keys.modelId] = next.modelId
-            prefs[Keys.sourceLanguage] = next.sourceLanguageCode
             prefs[Keys.targetLanguage] = next.targetLanguageCode
             prefs[Keys.fontSizeSp] = next.fontSizeSp
             prefs[Keys.backgroundAlpha] = next.backgroundAlpha
@@ -69,8 +67,9 @@ class UserSettingsRepository(private val context: Context) {
     private fun Preferences.toSettings(): UserSettings = UserSettings(
         endpoint = this[Keys.endpoint] ?: UserSettings.Defaults.ENDPOINT,
         modelId = this[Keys.modelId] ?: UserSettings.Defaults.MODEL_ID,
-        sourceLanguageCode = this[Keys.sourceLanguage] ?: UserSettings.Defaults.SOURCE_LANGUAGE,
-        targetLanguageCode = this[Keys.targetLanguage] ?: UserSettings.Defaults.TARGET_LANGUAGE,
+        targetLanguageCode = SupportedLanguages.canonicalOrDefault(
+            this[Keys.targetLanguage] ?: UserSettings.Defaults.TARGET_LANGUAGE,
+        ),
         fontSizeSp = this[Keys.fontSizeSp] ?: UserSettings.Defaults.FONT_SIZE_SP,
         backgroundAlpha = this[Keys.backgroundAlpha] ?: UserSettings.Defaults.BACKGROUND_ALPHA,
         bilingual = this[Keys.bilingual] ?: UserSettings.Defaults.BILINGUAL,

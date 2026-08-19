@@ -34,6 +34,11 @@ import java.util.concurrent.atomic.AtomicBoolean
  * - https://ai.google.dev/gemini-api/docs/live-api/live-translate
  * - google-genai Python SDK `_LiveConnectParameters_to_mldev` converter
  *
+ * Live Translation has no source-language field (unlike Live Agent). Only
+ * `targetLanguageCode` and `echoTargetLanguage` are sent. Input language is
+ * auto-detected; when it already matches the target, `echoTargetLanguage=true`
+ * parrots the original instead of staying silent.
+ *
  * Correct setup shape (AI Studio / mldev):
  * ```
  * {

@@ -20,10 +20,12 @@ import com.livetranslate.app.audio.PcmMixer
 import com.livetranslate.app.audio.SystemAudioCapturer
 import com.livetranslate.app.audio.TranslatedAudioPlayer
 import com.livetranslate.app.data.AudioSourceMode
+import com.livetranslate.app.data.SupportedLanguages
 import com.livetranslate.app.data.UserSettings
 import com.livetranslate.app.live.LiveTranslateClient
 import com.livetranslate.app.overlay.SubtitleOverlayController
 import com.livetranslate.app.ui.main.MainActivity
+import com.livetranslate.app.util.SameLanguageCaptionMode
 import com.livetranslate.app.util.TranscriptBuffer
 import com.livetranslate.app.util.TranscriptLineBreaker
 import kotlinx.coroutines.CoroutineScope
@@ -69,6 +71,7 @@ class SubtitleSessionService : Service() {
     private var pendingPreviewInput: String? = null
     private var pendingPreviewOutput: String? = null
     private var previewFlushJob: Job? = null
+    private val sameLanguageMode = SameLanguageCaptionMode()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -132,6 +135,7 @@ class SubtitleSessionService : Service() {
         pendingPreviewOutput = null
         previewFlushJob?.cancel()
         previewFlushJob = null
+        sameLanguageMode.reset()
         startAsForeground()
 
         val app = application as LiveTranslateApp
@@ -209,16 +213,29 @@ class SubtitleSessionService : Service() {
                         is LiveTranslateClient.LiveEvent.InputTranscript -> {
                             appendTranscript(accumulatedInput, event.text)
                             appendFull(fullInput, event.text)
-                            val display = TranscriptLineBreaker.format(accumulatedInput.toString())
-                            overlay?.updateTranscripts(input = display, output = null)
-                            publishPreview(input = display)
+                            val target = currentSettings.targetLanguageCode
+                            val toggled = if (event.languageCode.isNullOrBlank()) {
+                                sameLanguageMode.onInputTextFallback(
+                                    accumulatedInput.toString(),
+                                    target,
+                                    outputEmpty = accumulatedOutput.isEmpty(),
+                                )
+                            } else {
+                                sameLanguageMode.onDetectedInputLanguage(
+                                    event.languageCode,
+                                    target,
+                                )
+                            }
+                            if (toggled != null) {
+                                applyCaptionMode(toggled)
+                            } else {
+                                publishCaptionUpdate(inputChanged = true, outputChanged = false)
+                            }
                         }
                         is LiveTranslateClient.LiveEvent.OutputTranscript -> {
                             appendTranscript(accumulatedOutput, event.text)
                             appendFull(fullOutput, event.text)
-                            val display = TranscriptLineBreaker.format(accumulatedOutput.toString())
-                            overlay?.updateTranscripts(input = null, output = display)
-                            publishPreview(output = display)
+                            publishCaptionUpdate(inputChanged = false, outputChanged = true)
                         }
                         is LiveTranslateClient.LiveEvent.AudioChunk -> {
                             if (currentSettings.playTranslatedAudio) {
@@ -268,7 +285,12 @@ class SubtitleSessionService : Service() {
                     endpoint = currentSettings.endpoint,
                     apiKey = key,
                     modelId = currentSettings.modelId,
-                    targetLanguageCode = currentSettings.targetLanguageCode,
+                    targetLanguageCode = SupportedLanguages.canonicalOrDefault(
+                        currentSettings.targetLanguageCode,
+                    ),
+                    // Official: when input is already the target language, echo
+                    // instead of staying silent so same-language audio still
+                    // produces captions (e.g. Chinese video → Chinese subtitles).
                     echoTargetLanguage = true,
                 ),
             )
@@ -310,6 +332,34 @@ class SubtitleSessionService : Service() {
             Log.e(TAG, "capture start failed", e)
             SessionBus.setStatus(SessionBus.Status.Error, e.message ?: "音频采集启动失败")
             stopEverything(e.message ?: "音频采集启动失败")
+        }
+    }
+
+    /**
+     * Collapse or restore the overlay when source language equals the target.
+     * When collapsed, the input transcript is shown as the single caption line.
+     */
+    private fun applyCaptionMode(enabled: Boolean) {
+        overlay?.setSameLanguageMode(enabled)
+        publishCaptionUpdate(inputChanged = true, outputChanged = true)
+    }
+
+    private fun publishCaptionUpdate(inputChanged: Boolean, outputChanged: Boolean) {
+        val inDisplay = TranscriptLineBreaker.format(accumulatedInput.toString())
+        val outDisplay = TranscriptLineBreaker.format(accumulatedOutput.toString())
+        if (sameLanguageMode.enabled) {
+            val line = inDisplay.ifBlank { outDisplay }
+            overlay?.updateTranscripts(input = "", output = line)
+            publishPreview(input = "", output = line)
+        } else {
+            overlay?.updateTranscripts(
+                input = if (inputChanged) inDisplay else null,
+                output = if (outputChanged) outDisplay else null,
+            )
+            publishPreview(
+                input = if (inputChanged) inDisplay else null,
+                output = if (outputChanged) outDisplay else null,
+            )
         }
     }
 
@@ -419,7 +469,12 @@ class SubtitleSessionService : Service() {
         stopping = true
         flushPreview()
         val inFull = fullInput.toString()
-        val outFull = fullOutput.toString()
+        val rawOut = fullOutput.toString()
+        val outFull = when {
+            rawOut.isNotBlank() -> rawOut
+            sameLanguageMode.enabled -> inFull
+            else -> rawOut
+        }
         if (inFull.isNotBlank() || outFull.isNotBlank()) {
             SessionBus.markSessionFinished(inFull, outFull, message)
         }

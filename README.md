@@ -14,10 +14,10 @@ The app can capture **other apps' playback**, the **microphone**, or both, send 
 
 | Area | Description |
 |------|-------------|
-| **Subtitles tab** | Source / target language (remembered), audio source, start / stop, status and preview |
+| **Subtitles tab** | Target language (remembered; source is auto-detected), audio source, start / stop, status and preview |
 | **Audio source** | Media / microphone / media+mic (remembered; mic-only skips screen-capture permission) |
 | **Floating overlay** | Over other apps; thin top grabber to move; corner handle to resize (font size unchanged) |
-| **Display modes** | Translation only, or bilingual (source + translation with a divider) |
+| **Display modes** | Translation only, or bilingual (source + translation with a divider). If the audio is already in the target language, the overlay collapses to a single line |
 | **Auto-scroll** | Separate panes for source / translation; **scrolls one line only when a line wraps**. Display text is also split after sentence-ending punctuation once a line is long enough, so the stream stays readable. |
 | **Audio capture** | Media: `MediaProjection` + `AudioPlaybackCapture`; mic: `AudioRecord` → 16 kHz PCM |
 | **Live API** | WebSocket + `translationConfig`, aligned with the official Live Translate docs |
@@ -64,7 +64,7 @@ The app can capture **other apps' playback**, the **microphone**, or both, send 
 ### 3. Start subtitles
 
 1. Open the **Subtitles** tab  
-2. Choose **source** and **target** languages  
+2. Choose the **target** language (source is auto-detected)  
 3. Choose **audio source** (media / microphone / both)  
 4. Tap **Start subtitles**  
 5. Grant when prompted:
@@ -137,7 +137,7 @@ A local `miuix/` directory, if present, is for reference only and is **not** par
 ## Known limitations
 
 - Some apps / DRM content **block** playback capture → nothing to translate in media mode (try microphone)  
-- Live Translate is driven mainly by **target language**; source **Auto-detect** is the most reliable choice  
+- Live Translate only accepts a **target language**; source is auto-detected. `echoTargetLanguage` is on so same-language audio (e.g. a Chinese video with Chinese as the target) still produces captions as a single line  
 - Continuous streams do not align sentence-by-sentence; Markdown export is full source + full translation, not line pairs  
 - Preview models and quotas may change; endpoint and model ID are configurable in Settings  
 

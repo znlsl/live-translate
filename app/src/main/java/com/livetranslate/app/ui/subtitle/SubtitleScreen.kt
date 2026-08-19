@@ -49,8 +49,6 @@ import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-private enum class LangPicker { Source, Target }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubtitleScreen(
@@ -58,7 +56,6 @@ fun SubtitleScreen(
     settings: UserSettings,
     session: SessionBus.UiState,
     exportMessage: String?,
-    onSourceLanguage: (String) -> Unit,
     onTargetLanguage: (String) -> Unit,
     onAudioSource: (AudioSourceMode) -> Unit,
     onStart: () -> Unit,
@@ -69,7 +66,7 @@ fun SubtitleScreen(
     val running = session.status == SessionBus.Status.Running ||
         session.status == SessionBus.Status.Starting
 
-    var picker by remember { mutableStateOf<LangPicker?>(null) }
+    var showTargetPicker by remember { mutableStateOf(false) }
 
     val (statusLabel, tone) = when (session.status) {
         SessionBus.Status.Idle -> stringResource(R.string.status_idle) to StatusTone.Idle
@@ -169,31 +166,19 @@ fun SubtitleScreen(
         SectionCard {
             Column(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Row(
+                LanguageChip(
+                    title = stringResource(R.string.subtitle_target),
+                    value = stringResource(SupportedLanguages.labelResOf(settings.targetLanguageCode)),
+                    onClick = { showTargetPicker = true },
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    LanguageChip(
-                        title = stringResource(R.string.subtitle_source),
-                        value = stringResource(SupportedLanguages.labelResOf(settings.sourceLanguageCode)),
-                        onClick = { picker = LangPicker.Source },
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = "→",
-                        fontWeight = FontWeight.Bold,
-                        color = Booth.Accent,
-                    )
-                    LanguageChip(
-                        title = stringResource(R.string.subtitle_target),
-                        value = stringResource(SupportedLanguages.labelResOf(settings.targetLanguageCode)),
-                        onClick = { picker = LangPicker.Target },
-                        modifier = Modifier.weight(1f),
-                    )
-                }
+                )
+                Text(
+                    text = stringResource(R.string.subtitle_target_hint),
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
             }
         }
 
@@ -286,47 +271,31 @@ fun SubtitleScreen(
         Spacer(modifier = Modifier.height(24.dp))
     }
 
-    val currentPicker = picker
-    if (currentPicker != null) {
+    if (showTargetPicker) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        val options: List<LanguageOption> = when (currentPicker) {
-            LangPicker.Source -> SupportedLanguages.sourceOptions
-            LangPicker.Target -> SupportedLanguages.targetOptions
-        }
-        val selected = when (currentPicker) {
-            LangPicker.Source -> settings.sourceLanguageCode
-            LangPicker.Target -> settings.targetLanguageCode
-        }
+        val options: List<LanguageOption> = SupportedLanguages.targetOptions
+        val selected = settings.targetLanguageCode
         ModalBottomSheet(
-            onDismissRequest = { picker = null },
+            onDismissRequest = { showTargetPicker = false },
             sheetState = sheetState,
             containerColor = MiuixTheme.colorScheme.surfaceContainer,
         ) {
             Column(modifier = Modifier.padding(bottom = 24.dp)) {
                 Text(
-                    text = stringResource(
-                        if (currentPicker == LangPicker.Source) {
-                            R.string.subtitle_pick_source
-                        } else {
-                            R.string.subtitle_pick_target
-                        },
-                    ),
+                    text = stringResource(R.string.subtitle_pick_target),
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
                 )
-                LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                LazyColumn(modifier = Modifier.heightIn(max = 520.dp)) {
                     itemsIndexed(options) { _, option ->
                         val selectedRow = option.code == selected
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    when (currentPicker) {
-                                        LangPicker.Source -> onSourceLanguage(option.code)
-                                        LangPicker.Target -> onTargetLanguage(option.code)
-                                    }
-                                    picker = null
+                                    onTargetLanguage(option.code)
+                                    showTargetPicker = false
                                 }
                                 .padding(horizontal = 20.dp, vertical = 14.dp),
                             verticalAlignment = Alignment.CenterVertically,

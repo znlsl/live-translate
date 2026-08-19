@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.livetranslate.app.R
 import com.livetranslate.app.data.ApiKeyStore
 import com.livetranslate.app.data.AudioSourceMode
+import com.livetranslate.app.data.SupportedLanguages
 import com.livetranslate.app.data.UserSettings
 import com.livetranslate.app.data.UserSettingsRepository
 import com.livetranslate.app.service.SessionBus
@@ -33,12 +34,10 @@ class SubtitleViewModel(
 
     fun hasApiKey(): Boolean = apiKeyStore.hasApiKey()
 
-    suspend fun setSourceLanguage(code: String) {
-        settingsRepository.update { it.copy(sourceLanguageCode = code) }
-    }
-
     suspend fun setTargetLanguage(code: String) {
-        settingsRepository.update { it.copy(targetLanguageCode = code) }
+        settingsRepository.update {
+            it.copy(targetLanguageCode = SupportedLanguages.canonicalOrDefault(code))
+        }
     }
 
     suspend fun setAudioSource(mode: AudioSourceMode) {

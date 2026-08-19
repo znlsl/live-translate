@@ -31,6 +31,8 @@ import kotlin.math.roundToInt
  * - clamps size/position on orientation change so the handle never goes off-screen
  * - bilingual: source + divider + translation, each with independent auto-scroll
  * - translation-only: single auto-scrolling pane
+ * - same-language (input already equals target): force a single pane even if
+ *   bilingual is enabled
  */
 class SubtitleOverlayController(
     private val context: Context,
@@ -49,6 +51,7 @@ class SubtitleOverlayController(
     private var container: LinearLayout? = null
 
     private var settings: UserSettings = UserSettings()
+    private var sameLanguageMode: Boolean = false
     private var inputText: String = ""
     private var outputText: String = ""
 
@@ -139,6 +142,19 @@ class SubtitleOverlayController(
         applyTranscriptsToViews()
     }
 
+    /**
+     * When the detected input language is already the target, collapse to one
+     * caption line. Does not persist the bilingual setting.
+     */
+    fun setSameLanguageMode(enabled: Boolean) {
+        if (sameLanguageMode == enabled) return
+        sameLanguageMode = enabled
+        lastInputLineCount = 0
+        lastOutputLineCount = 0
+        applyLayoutMode()
+        applyTranscriptsToViews()
+    }
+
     fun updateTranscripts(input: String?, output: String?) {
         if (input != null) inputText = input
         if (output != null) outputText = output
@@ -158,6 +174,11 @@ class SubtitleOverlayController(
         dividerView = null
         inputSection = null
         container = null
+        sameLanguageMode = false
+        inputText = ""
+        outputText = ""
+        lastInputLineCount = 0
+        lastOutputLineCount = 0
     }
 
     private fun clampAndApply(persist: Boolean, reason: String) {
@@ -290,7 +311,7 @@ class SubtitleOverlayController(
                 0,
                 1f,
             )
-            visibility = if (settings.bilingual) View.VISIBLE else View.GONE
+            visibility = if (effectiveBilingual()) View.VISIBLE else View.GONE
         }
         inputSection = sourceSection
 
@@ -336,7 +357,7 @@ class SubtitleOverlayController(
                 bottomMargin = (4 * density).roundToInt()
             }
             setBackgroundColor(Color.argb(70, 255, 255, 255))
-            visibility = if (settings.bilingual) View.VISIBLE else View.GONE
+            visibility = if (effectiveBilingual()) View.VISIBLE else View.GONE
         }
         dividerView = divider
         column.addView(divider)
@@ -390,9 +411,11 @@ class SubtitleOverlayController(
         return root
     }
 
+    private fun effectiveBilingual(): Boolean = settings.bilingual && !sameLanguageMode
+
     /** Switch bilingual (split + divider) vs translation-only (full height scroll). */
     private fun applyLayoutMode() {
-        val bilingual = settings.bilingual
+        val bilingual = effectiveBilingual()
         inputSection?.visibility = if (bilingual) View.VISIBLE else View.GONE
         dividerView?.visibility = if (bilingual) View.VISIBLE else View.GONE
 

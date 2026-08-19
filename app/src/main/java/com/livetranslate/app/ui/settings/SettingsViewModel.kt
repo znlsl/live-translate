@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.livetranslate.app.data.ApiKeyStore
+import com.livetranslate.app.data.SupportedLanguages
 import com.livetranslate.app.data.UserSettings
 import com.livetranslate.app.data.UserSettingsRepository
 import com.livetranslate.app.live.LiveTranslateClient
@@ -90,7 +91,7 @@ class SettingsViewModel(
 
             val endpoint = s.endpoint.trim().ifBlank { UserSettings.Defaults.ENDPOINT }
             val modelId = s.modelId.trim().ifBlank { UserSettings.Defaults.MODEL_ID }
-            val targetLang = s.targetLanguageCode.ifBlank { "zh-Hans" }
+            val targetLang = SupportedLanguages.canonicalOrDefault(s.targetLanguageCode)
 
             val lines = mutableListOf<String>()
             var okCount = 0
