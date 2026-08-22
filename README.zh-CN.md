@@ -136,6 +136,7 @@ app/src/main/java/com/livetranslate/app/
 
 ## 已知限制
 
+- **谷歌对 Live API 的单条连接有约 10 分钟的寿命限制**（见官方 [Session management](https://ai.google.dev/gemini-api/docs/live-api/session-management)）。这是谷歌服务端的限制，不是 App 的 bug——App 会自动处理：断开时用续接令牌恢复同一会话，翻译不中断。每约 10 分钟会出现 1–2 秒的「正在续接」停顿，属正常现象  
 - 部分 App / DRM 内容**禁止**被内录 → 媒体音模式下无声可译（可改用麦克风）  
 - Live Translate 只接受**目标语言**，源语言由接口自动检测。已打开 `echoTargetLanguage`：原声已是目标语时（例如中文视频、目标也是中文）仍会出字幕，并自动收成一行
 - 连续流字幕不好做句对句对齐，导出 MD 是「全文原文 + 全文译文」两段，不是逐句对照  
