@@ -1,5 +1,9 @@
 # Live Translate
 
+> [!WARNING]
+> ⚠️ **注意 / NOTE — Google's 10-minute connection limit** ⚠️
+> The Gemini Live API terminates **every WebSocket connection after ~10 minutes**. This is a **Google server-side restriction** ([official docs](https://ai.google.dev/gemini-api/docs/live-api/session-management)), not a bug in this app. When it happens, the app shows "连接中断，正在自动续接…" and **auto-reconnects with session resumption** so captions continue — a brief pause around every 10 minutes is expected behavior.
+
 [中文文档](README.zh-CN.md)
 
 Looking for a desktop version? Check out the [Windows version of Live Translate](https://github.com/luoxiaoxin123/live-translate-windows).
@@ -136,7 +140,6 @@ A local `miuix/` directory, if present, is for reference only and is **not** par
 
 ## Known limitations
 
-- **Google's server caps each Live API connection at ~10 minutes** (see [Session management](https://ai.google.dev/gemini-api/docs/live-api/session-management)). This is a Google-side limit, not a bug — the app handles it automatically: on disconnect it resumes the same session with the stored handle and keeps translating. Expect a brief "reconnecting" pause (1–2 seconds) around every 10 minutes; that's normal  
 - Some apps / DRM content **block** playback capture → nothing to translate in media mode (try microphone)  
 - Live Translate only accepts a **target language**; source is auto-detected. `echoTargetLanguage` is on so same-language audio (e.g. a Chinese video with Chinese as the target) still produces captions as a single line  
 - Continuous streams do not align sentence-by-sentence; Markdown export is full source + full translation, not line pairs  
