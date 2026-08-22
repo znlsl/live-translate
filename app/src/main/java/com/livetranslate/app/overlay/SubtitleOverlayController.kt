@@ -1,5 +1,8 @@
 package com.livetranslate.app.overlay
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.ComponentCallbacks
 import android.content.Context
@@ -14,11 +17,13 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -33,7 +38,8 @@ import kotlin.math.roundToInt
 /**
  * Floating subtitle window using classic Views (reliable with WindowManager).
  * - top control strip (grabber + close button): shown for 5s on start, then
- *   slides away; tap the captions to reveal it again, it auto-hides after 5s idle
+ *   collapses away (its space is freed too); tap anywhere on the captions —
+ *   a real tap, not a scroll — to pop it back out; auto-hides after 5s idle
  * - corner arc handle to resize box only (font size unchanged)
  * - clamps size/position on orientation change so the handle never goes off-screen
  * - bilingual: source + divider + translation, each with independent auto-scroll
@@ -64,6 +70,7 @@ class SubtitleOverlayController(
     private val controlsHandler = Handler(Looper.getMainLooper())
     private var controlsShown = false
     private var grabberRowHeightPx = 0
+    private var rowAnimator: ValueAnimator? = null
 
     private var settings: UserSettings = UserSettings()
     private var sameLanguageMode: Boolean = false
@@ -182,6 +189,8 @@ class SubtitleOverlayController(
         unregisterCallbacks()
         controlsHandler.removeCallbacksAndMessages(null)
         controlsShown = false
+        rowAnimator?.cancel()
+        rowAnimator = null
         grabberRow?.animate()?.cancel()
         val view = rootView ?: return
         runCatching { windowManager.removeView(view) }
@@ -203,23 +212,34 @@ class SubtitleOverlayController(
         lastOutputLineCount = 0
     }
 
-    /** Reveal the control strip and auto-hide it again after 5s of inactivity. */
+    /**
+     * Reveal the control strip — it slides down out of the window's top edge and
+     * its space is added back to the caption area — then auto-hide after 5s idle.
+     */
     private fun revealControlsTemporarily() {
         if (rootView == null) return
         if (!controlsShown) {
             controlsShown = true
             val row = grabberRow ?: return
-            row.clearAnimation()
-            row.animate().cancel()
+            cancelRowAnimations(row)
             row.isEnabled = true
             row.visibility = View.VISIBLE
-            row.alpha = 0f
-            row.translationY = -grabberRowHeightPx * 0.7f
-            row.animate()
-                .alpha(1f)
-                .translationY(0f)
-                .setDuration(180)
-                .start()
+            val lp = row.layoutParams as? LinearLayout.LayoutParams ?: return
+            val startH = if (row.height > 0) row.height.coerceAtMost(grabberRowHeightPx) else 0
+            lp.height = startH
+            row.layoutParams = lp
+            if (startH < grabberRowHeightPx) {
+                row.alpha = if (startH == 0) 0f else row.alpha
+                row.animate().alpha(1f).setDuration(150).start()
+                rowAnimator = ValueAnimator.ofInt(startH, grabberRowHeightPx).apply {
+                    duration = 200
+                    addUpdateListener { a ->
+                        lp.height = a.animatedValue as Int
+                        row.layoutParams = lp
+                    }
+                    start()
+                }
+            }
         }
         scheduleControlsHide()
     }
@@ -230,10 +250,14 @@ class SubtitleOverlayController(
         if (!controlsShown) {
             controlsShown = true
             val row = grabberRow ?: return
+            cancelRowAnimations(row)
             row.isEnabled = true
             row.visibility = View.VISIBLE
             row.alpha = 1f
-            row.translationY = 0f
+            (row.layoutParams as? LinearLayout.LayoutParams)?.let { lp ->
+                lp.height = grabberRowHeightPx
+                row.layoutParams = lp
+            }
         }
     }
 
@@ -242,23 +266,41 @@ class SubtitleOverlayController(
         controlsHandler.postDelayed(hideControlsRunnable, CONTROLS_AUTO_HIDE_MS)
     }
 
+    private fun cancelRowAnimations(row: View) {
+        rowAnimator?.cancel()
+        rowAnimator = null
+        row.animate().cancel()
+    }
+
     private val hideControlsRunnable = Runnable {
         val row = grabberRow ?: return@Runnable
         controlsShown = false
-        row.animate()
-            .alpha(0f)
-            .translationY(-grabberRowHeightPx * 0.7f)
-            .setDuration(220)
-            .withEndAction {
-                if (!controlsShown) {
-                    // INVISIBLE keeps the layout stable; disabled so the hidden
-                    // strip doesn't swallow drags meant for the captions.
-                    row.isEnabled = false
-                    row.visibility = View.INVISIBLE
-                    row.translationY = 0f
-                }
+        cancelRowAnimations(row)
+        val lp = row.layoutParams as? LinearLayout.LayoutParams ?: return@Runnable
+        val startH = row.height.coerceIn(0, grabberRowHeightPx)
+        row.animate().alpha(0f).setDuration(140).start()
+        rowAnimator = ValueAnimator.ofInt(startH, 0).apply {
+            duration = 200
+            addUpdateListener { a ->
+                lp.height = a.animatedValue as Int
+                row.layoutParams = lp
             }
-            .start()
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (!controlsShown) {
+                        // GONE frees the strip's space for the captions. Disabled
+                        // so the hidden strip never swallows caption drags.
+                        row.isEnabled = false
+                        row.visibility = View.GONE
+                        row.alpha = 1f
+                        lp.height = grabberRowHeightPx
+                        row.layoutParams = lp
+                    }
+                    rowAnimator = null
+                }
+            })
+            start()
+        }
     }
 
     private fun clampAndApply(persist: Boolean, reason: String) {
@@ -343,7 +385,10 @@ class SubtitleOverlayController(
 
     @SuppressLint("ClickableViewAccessibility")
     private fun buildOverlayView(density: Float): View {
-        val root = FrameLayout(context)
+        // Root detects taps anywhere in the window (including areas the caption
+        // ScrollViews consume) so the control strip can be revealed with a tap,
+        // while scrolls/drags still pass through untouched.
+        val root = TapDetectLayout(context) { revealControlsTemporarily() }
 
         val bg = GradientDrawable().apply {
             cornerRadius = 12 * density
@@ -505,15 +550,47 @@ class SubtitleOverlayController(
         handle.setOnTouchListener(ResizeTouchListener())
         root.addView(handle)
 
-        // Tap anywhere on the captions to reveal the control strip again. The
-        // ScrollViews consume touches themselves, so they need their own listener.
-        val reveal = View.OnClickListener { revealControlsTemporarily() }
-        root.setOnClickListener(reveal)
-        inScroll.setOnClickListener(reveal)
-        outScroll.setOnClickListener(reveal)
-
         applyLayoutMode()
         return root
+    }
+
+    /**
+     * Root container that reports real taps anywhere in the window. Watching at
+     * the dispatch level (instead of click listeners) means taps still register
+     * on areas consumed by the caption ScrollViews, while scrolls and drags —
+     * anything moving past the touch slop — never trigger the reveal.
+     */
+    private class TapDetectLayout(
+        context: Context,
+        private val onSingleTap: () -> Unit,
+    ) : FrameLayout(context) {
+        private var downX = 0f
+        private var downY = 0f
+        private var downAt = 0L
+        private val slop = ViewConfiguration.get(context).scaledTouchSlop
+
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = ev.x
+                    downY = ev.y
+                    downAt = SystemClock.uptimeMillis()
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dx = ev.x - downX
+                    val dy = ev.y - downY
+                    val quick = SystemClock.uptimeMillis() - downAt <= TAP_TIMEOUT_MS
+                    if (quick && dx * dx + dy * dy <= slop * slop) {
+                        onSingleTap()
+                    }
+                }
+            }
+            return super.dispatchTouchEvent(ev)
+        }
+
+        companion object {
+            private const val TAP_TIMEOUT_MS = 400L
+        }
     }
 
     /**
