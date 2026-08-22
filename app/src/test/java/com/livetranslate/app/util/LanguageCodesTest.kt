@@ -51,6 +51,26 @@ class LanguageCodesTest {
     }
 
     @Test
+    fun regionSensitivePortugueseVariantsDoNotCollapse() {
+        // pt-BR and pt-PT are distinct target options; must not be treated as
+        // the same language (which would wrongly collapse bilingual captions).
+        assertFalse(LanguageCodes.matchesTarget("pt-BR", "pt-PT"))
+        assertFalse(LanguageCodes.matchesTarget("pt-PT", "pt-BR"))
+        assertTrue(LanguageCodes.matchesTarget("pt-BR", "pt-BR"))
+        assertTrue(LanguageCodes.matchesTarget("pt-PT", "pt-PT"))
+    }
+
+    @Test
+    fun missingRegionStaysCompatibleWithEitherVariant() {
+        // Detection without a region can't distinguish — stay permissive.
+        assertTrue(LanguageCodes.matchesTarget("pt", "pt-BR"))
+        assertTrue(LanguageCodes.matchesTarget("pt", "pt-PT"))
+        // Target without a region doesn't care where detection came from.
+        assertTrue(LanguageCodes.matchesTarget("en-US", "en"))
+        assertTrue(LanguageCodes.matchesTarget("en-GB", "en"))
+    }
+
+    @Test
     fun hanTextLooksLikeSimplifiedChinese() {
         assertTrue(
             LanguageCodes.textLooksLikeTarget(

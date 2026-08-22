@@ -8,10 +8,9 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Captures microphone PCM and resamples to 16 kHz mono LE for Live Translate.
@@ -26,7 +25,10 @@ class MicAudioCapturer(
     private var running = false
 
     @SuppressLint("MissingPermission")
-    fun start(onPcm16k: (ByteArray) -> Unit) {
+    fun start(
+        onPcm16k: (ByteArray) -> Unit,
+        onError: (String) -> Unit = {},
+    ) {
         stop()
         val sourceRate = 44_100
         val channelConfig = AudioFormat.CHANNEL_IN_MONO
@@ -54,14 +56,30 @@ class MicAudioCapturer(
             // Read in ~100ms chunks so the first transcript appears sooner.
             val readBuf = ShortArray(READ_CHUNK_SAMPLES)
             val resampler = PcmResampler(sourceRate, 16_000)
+            var zeroStreak = 0
             while (isActive && running) {
                 val n = record.read(readBuf, 0, readBuf.size)
-                if (n > 0) {
-                    val pcm16k = resampler.resample(readBuf, n)
-                    if (pcm16k.isNotEmpty()) onPcm16k(pcm16k)
-                } else if (n < 0) {
-                    Log.w(TAG, "mic read error: $n")
-                    break
+                when {
+                    n > 0 -> {
+                        zeroStreak = 0
+                        val pcm16k = resampler.resample(readBuf, n)
+                        if (pcm16k.isNotEmpty()) onPcm16k(pcm16k)
+                    }
+                    n == 0 -> {
+                        // Stalled record returns 0 immediately — back off instead
+                        // of busy-spinning, then give up and report.
+                        zeroStreak++
+                        if (zeroStreak >= ZERO_READ_LIMIT) {
+                            onError("麦克风采集停滞（AudioRecord 持续无数据）")
+                            break
+                        }
+                        delay(20)
+                    }
+                    else -> {
+                        Log.w(TAG, "mic read error: $n")
+                        onError("麦克风采集读取失败：$n")
+                        break
+                    }
                 }
             }
         }
@@ -70,20 +88,13 @@ class MicAudioCapturer(
     fun stop() {
         running = false
         val record = audioRecord
-        val job = captureJob
         captureJob = null
         try {
             record?.stop()
         } catch (_: Exception) {
         }
-        job?.cancel()
-        if (job != null) {
-            runCatching {
-                runBlocking {
-                    withTimeoutOrNull(400) { job.join() }
-                }
-            }
-        }
+        // record.stop()/release() unblocks any in-flight read, so the capture
+        // coroutine exits on its own — no main-thread join needed here.
         try {
             record?.release()
         } catch (_: Exception) {
@@ -96,5 +107,8 @@ class MicAudioCapturer(
         private const val SOURCE_RATE = 44_100
         // ~100ms of audio at 44.1 kHz: smaller reads reach the model sooner.
         private const val READ_CHUNK_SAMPLES = SOURCE_RATE / 10
+
+        /** 50 × 20ms of zero reads (~1s) means the record is effectively dead. */
+        private const val ZERO_READ_LIMIT = 50
     }
 }

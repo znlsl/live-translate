@@ -20,7 +20,7 @@ The app can capture **other apps' playback**, the **microphone**, or both, send 
 | **Display modes** | Translation only, or bilingual (source + translation with a divider). If the audio is already in the target language, the overlay collapses to a single line |
 | **Auto-scroll** | Separate panes for source / translation; **scrolls one line only when a line wraps**. Display text is also split after sentence-ending punctuation once a line is long enough, so the stream stays readable. |
 | **Audio capture** | Media: `MediaProjection` + `AudioPlaybackCapture`; mic: `AudioRecord` → 16 kHz PCM |
-| **Live API** | WebSocket + `translationConfig`, aligned with the official Live Translate docs |
+| **Live API** | WebSocket + `translationConfig`, aligned with the official Live Translate docs. Sliding-window context compression + session resumption with auto-reconnect, so long sessions survive the server's ~10-minute connection cap |
 | **Translated voice** | Off by default; plays in parallel without pausing the video; volume up to **200%** (digital gain) |
 | **Multiple API keys** | Up to 10 keys; rotate on each session; connection test checks every key |
 | **Export** | After stop, export this session as Markdown to Downloads |

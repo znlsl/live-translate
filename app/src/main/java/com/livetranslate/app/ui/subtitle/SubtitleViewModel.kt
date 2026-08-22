@@ -13,6 +13,7 @@ import com.livetranslate.app.data.UserSettings
 import com.livetranslate.app.data.UserSettingsRepository
 import com.livetranslate.app.service.SessionBus
 import com.livetranslate.app.util.ExportTranslator
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -50,21 +51,24 @@ class SubtitleViewModel(
             _exportMessage.value = getApplication<Application>().getString(R.string.subtitle_export_empty)
             return
         }
-        val now = LocalDateTime.now()
-        val name = ExportTranslator.fileName(now)
-        val md = ExportTranslator.buildMarkdown(s.lastInputFull, s.lastOutputFull, now)
-        val result = ExportTranslator.saveToDownloads(getApplication(), name, md)
-        _exportMessage.value = result.fold(
-            onSuccess = { path ->
-                getApplication<Application>().getString(R.string.subtitle_export_ok, path)
-            },
-            onFailure = { e ->
-                getApplication<Application>().getString(
-                    R.string.subtitle_export_fail,
-                    e.message.orEmpty(),
-                )
-            },
-        )
+        // MediaStore insert + stream write is disk I/O — off the main thread.
+        viewModelScope.launch(Dispatchers.IO) {
+            val now = LocalDateTime.now()
+            val name = ExportTranslator.fileName(now)
+            val md = ExportTranslator.buildMarkdown(s.lastInputFull, s.lastOutputFull, now)
+            val result = ExportTranslator.saveToDownloads(getApplication(), name, md)
+            _exportMessage.value = result.fold(
+                onSuccess = { path ->
+                    getApplication<Application>().getString(R.string.subtitle_export_ok, path)
+                },
+                onFailure = { e ->
+                    getApplication<Application>().getString(
+                        R.string.subtitle_export_fail,
+                        e.message.orEmpty(),
+                    )
+                },
+            )
+        }
     }
 
     fun clearExportMessage() {

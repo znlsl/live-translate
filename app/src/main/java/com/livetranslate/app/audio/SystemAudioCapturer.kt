@@ -9,10 +9,9 @@ import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Captures other apps' media playback via AudioPlaybackCapture (API 29+),
@@ -30,6 +29,7 @@ class SystemAudioCapturer(
     fun start(
         mediaProjection: MediaProjection,
         onPcm16k: (ByteArray) -> Unit,
+        onError: (String) -> Unit = {},
     ) {
         stop()
         val captureConfig = AudioPlaybackCaptureConfiguration.Builder(mediaProjection)
@@ -72,14 +72,30 @@ class SystemAudioCapturer(
             // bufferSize stays large to avoid underruns; only the read size shrinks.
             val readBuf = ShortArray(READ_CHUNK_SAMPLES)
             val resampler = PcmResampler(sourceRate, 16_000)
+            var zeroStreak = 0
             while (isActive && running) {
                 val n = record.read(readBuf, 0, readBuf.size)
-                if (n > 0) {
-                    val pcm16k = resampler.resample(readBuf, n)
-                    if (pcm16k.isNotEmpty()) onPcm16k(pcm16k)
-                } else if (n < 0) {
-                    Log.w(TAG, "AudioRecord read error: $n")
-                    break
+                when {
+                    n > 0 -> {
+                        zeroStreak = 0
+                        val pcm16k = resampler.resample(readBuf, n)
+                        if (pcm16k.isNotEmpty()) onPcm16k(pcm16k)
+                    }
+                    n == 0 -> {
+                        // Stalled record returns 0 immediately — back off instead
+                        // of busy-spinning, then give up and report.
+                        zeroStreak++
+                        if (zeroStreak >= ZERO_READ_LIMIT) {
+                            onError("系统音频采集停滞（AudioRecord 持续无数据）")
+                            break
+                        }
+                        delay(20)
+                    }
+                    else -> {
+                        Log.w(TAG, "AudioRecord read error: $n")
+                        onError("系统音频采集读取失败：$n")
+                        break
+                    }
                 }
             }
         }
@@ -88,20 +104,14 @@ class SystemAudioCapturer(
     fun stop() {
         running = false
         val record = audioRecord
-        val job = captureJob
         captureJob = null
         try {
             record?.stop()
         } catch (_: Exception) {
         }
-        job?.cancel()
-        if (job != null) {
-            runCatching {
-                runBlocking {
-                    withTimeoutOrNull(400) { job.join() }
-                }
-            }
-        }
+        // record.stop()/release() below unblocks any in-flight read, so the
+        // capture coroutine exits on its own — no need to join it here (this
+        // method runs on the main thread during session teardown).
         try {
             record?.release()
         } catch (_: Exception) {
@@ -114,5 +124,8 @@ class SystemAudioCapturer(
         private const val SOURCE_RATE = 44_100
         // ~100ms of audio at 44.1 kHz: smaller reads reach the model sooner.
         private const val READ_CHUNK_SAMPLES = SOURCE_RATE / 10
+
+        /** 50 × 20ms of zero reads (~1s) means the record is effectively dead. */
+        private const val ZERO_READ_LIMIT = 50
     }
 }

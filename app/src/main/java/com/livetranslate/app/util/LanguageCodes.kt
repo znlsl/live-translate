@@ -19,7 +19,9 @@ object LanguageCodes {
      * (`nb`/`no`, `cmn`/`zh`) and Chinese script/region (`zh-CN` ≈ `zh-Hans`).
      *
      * `zh` with no script matches both Simplified and Traditional. `zh-Hans`
-     * does not match `zh-Hant`.
+     * does not match `zh-Hant`. Region-sensitive pairs like `pt-BR`/`pt-PT`
+     * are distinct targets, so both sides carrying different regions is a
+     * mismatch; a side without a region stays compatible with either.
      */
     fun matchesTarget(detected: String?, target: String): Boolean {
         val d = parse(detected) ?: return false
@@ -28,6 +30,7 @@ object LanguageCodes {
         val ds = effectiveScript(d)
         val ts = effectiveScript(t)
         if (ds != null && ts != null && ds != ts) return false
+        if (d.region != null && t.region != null && d.region != t.region) return false
         return true
     }
 

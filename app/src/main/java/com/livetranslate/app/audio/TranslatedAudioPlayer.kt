@@ -33,6 +33,9 @@ class TranslatedAudioPlayer {
 
     private val queue = LinkedBlockingQueue<ByteArray>(MAX_QUEUE_CHUNKS)
     private val trackRef = AtomicReference<AudioTrack?>(null)
+
+    /** Written from the event collector thread, read by the writer thread. */
+    @Volatile
     private var sampleRate = DEFAULT_SAMPLE_RATE
 
     private val writer = thread(
@@ -77,7 +80,9 @@ class TranslatedAudioPlayer {
         parseSampleRate(mimeType)?.let { rate ->
             if (rate != sampleRate && rate in 8_000..48_000) {
                 sampleRate = rate
-                // Recreate track on writer thread via sentinel empty + ensure
+                // Drop chunks queued at the old rate so they don't play at the
+                // new speed, then recreate the track on the writer thread.
+                queue.clear()
                 queue.offer(RECREATE_SENTINEL)
             }
         }
@@ -93,7 +98,9 @@ class TranslatedAudioPlayer {
         enabled.set(false)
         queue.clear()
         queue.offer(STOP_SENTINEL)
-        runCatching { writer.join(500) }
+        // No writer.join here — this runs on the main thread during teardown.
+        // The STOP sentinel makes the writer exit and release the track itself;
+        // releaseTrack below is idempotent for the race where both run.
         releaseTrack()
     }
 

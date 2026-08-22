@@ -66,21 +66,46 @@ class LiveTranslateClient {
         .retryOnConnectionFailure(true)
         .build()
 
+    @Volatile
     private var webSocket: WebSocket? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val setupComplete = AtomicBoolean(false)
     private val intentionalClose = AtomicBoolean(false)
 
+    /**
+     * Latest session-resumption handle from the server. Non-null once the
+     * session is resumable; pass it as [SessionConfig.resumptionHandle] on
+     * reconnect to continue the same session on a new connection.
+     */
+    @Volatile
+    var lastResumptionHandle: String? = null
+        private set
+
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
+    /**
+     * Text/control events (transcripts, errors, goAway). SUSPEND overflow means
+     * a slow collector delays the producer instead of dropping transcript text.
+     */
     private val _events = MutableSharedFlow<LiveEvent>(
+        replay = 0,
+        extraBufferCapacity = 256,
+        onBufferOverflow = BufferOverflow.SUSPEND,
+    )
+    val events: SharedFlow<LiveEvent> = _events.asSharedFlow()
+
+    /**
+     * High-rate audio chunks on their own flow. Dropping these under pressure
+     * only blips the translated voice; transcript text on [events] is never lost.
+     */
+    private val _audioChunks = MutableSharedFlow<LiveEvent.AudioChunk>(
         replay = 0,
         extraBufferCapacity = 128,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
-    val events: SharedFlow<LiveEvent> = _events.asSharedFlow()
+    val audioChunks: SharedFlow<LiveEvent.AudioChunk> = _audioChunks.asSharedFlow()
 
     data class SessionConfig(
         val endpoint: String,
@@ -88,6 +113,8 @@ class LiveTranslateClient {
         val modelId: String,
         val targetLanguageCode: String,
         val echoTargetLanguage: Boolean = true,
+        /** Server-issued handle; non-null reconnects into the previous session. */
+        val resumptionHandle: String? = null,
     )
 
     sealed class ConnectionState {
@@ -108,6 +135,9 @@ class LiveTranslateClient {
         data class Error(val message: String) : LiveEvent()
         data object SetupComplete : LiveEvent()
         data class Debug(val message: String) : LiveEvent()
+
+        /** Server will terminate this connection soon; reconnect to continue. */
+        data class GoAway(val timeLeftMs: Long?) : LiveEvent()
     }
 
     fun connect(config: SessionConfig) {
@@ -136,7 +166,11 @@ class LiveTranslateClient {
         webSocket = client.newWebSocket(
             request,
             object : WebSocketListener() {
+                /** A reconnect replaces the socket; ignore stale callbacks. */
+                private fun isStale(ws: WebSocket): Boolean = ws !== this@LiveTranslateClient.webSocket
+
                 override fun onOpen(webSocket: WebSocket, response: Response) {
+                    if (isStale(webSocket)) return
                     Log.i(TAG, "WebSocket open code=${response.code}")
                     emitDebug("WebSocket 已打开，发送 setup…")
                     val setup = buildSetupMessage(config)
@@ -148,15 +182,18 @@ class LiveTranslateClient {
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (isStale(webSocket)) return
                     handleMessage(text)
                 }
 
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                    if (isStale(webSocket)) return
                     // Server may send binary JSON frames.
                     handleMessage(bytes.utf8())
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (isStale(webSocket)) return
                     if (intentionalClose.get()) return
                     val body = runCatching { response?.body?.string() }.getOrNull()
                     val code = response?.code
@@ -170,6 +207,7 @@ class LiveTranslateClient {
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    if (isStale(webSocket)) return
                     Log.i(TAG, "WebSocket closing: $code $reason")
                     if (!intentionalClose.get() && !setupComplete.get()) {
                         fail("连接在 setup 完成前关闭: $code ${reason.ifBlank { "(no reason)" }}")
@@ -178,6 +216,7 @@ class LiveTranslateClient {
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    if (isStale(webSocket)) return
                     Log.i(TAG, "WebSocket closed: $code $reason")
                     if (intentionalClose.get()) {
                         _connectionState.value = ConnectionState.Idle
@@ -293,6 +332,14 @@ class LiveTranslateClient {
     }
 
     private fun emitEvent(event: LiveEvent) {
+        if (event is LiveEvent.AudioChunk) {
+            if (!_audioChunks.tryEmit(event)) {
+                scope.launch { _audioChunks.emit(event) }
+            }
+            return
+        }
+        // With SUSPEND overflow a failed tryEmit means the buffer is full —
+        // suspend in the IO scope until there's room; never drop text events.
         if (!_events.tryEmit(event)) {
             scope.launch { _events.emit(event) }
         }
@@ -332,6 +379,27 @@ class LiveTranslateClient {
                 }
                 fail(message)
                 return
+            }
+
+            // Top-level session-management messages arrive without serverContent —
+            // they must be handled before the serverContent branch below returns.
+            val goAway = root.optJSONObject("goAway") ?: root.optJSONObject("go_away")
+            if (goAway != null) {
+                val timeLeftMs = parseDurationMs(goAway.optString("timeLeft").ifBlank { goAway.optString("time_left") })
+                Log.i(TAG, "goAway: timeLeft=$timeLeftMs ms")
+                emitEvent(LiveEvent.GoAway(timeLeftMs))
+            }
+
+            val resumption = root.optJSONObject("sessionResumptionUpdate")
+                ?: root.optJSONObject("session_resumption_update")
+            if (resumption != null) {
+                val resumable = resumption.optBoolean("resumable", false)
+                val newHandle = resumption.optStringOrNull("newHandle")
+                    ?: resumption.optStringOrNull("new_handle")
+                if (resumable && !newHandle.isNullOrBlank()) {
+                    lastResumptionHandle = newHandle
+                    emitDebug("会话可续接（handle 已更新）")
+                }
             }
 
             val serverContent = root.optJSONObject("serverContent")
@@ -395,6 +463,9 @@ class LiveTranslateClient {
      * Build setup message matching google-genai mldev converter:
      * - responseModalities + translationConfig → generationConfig
      * - input/output transcription → setup top-level
+     * - sessionResumption + contextWindowCompression (per session-management docs):
+     *   sliding-window compression lifts the 15-minute session cap, and the
+     *   resumption handle lets one session survive the ~10-minute connection cap.
      */
     private fun buildSetupMessage(config: SessionConfig): String {
         val model = config.modelId.trim().removePrefix("models/")
@@ -409,13 +480,29 @@ class LiveTranslateClient {
                     .put("echoTargetLanguage", config.echoTargetLanguage),
             )
 
+        val resumption = config.resumptionHandle?.let { handle ->
+            JSONObject().put("handle", handle)
+        } ?: JSONObject()
+
         val setup = JSONObject()
             .put("model", "models/$model")
             .put("generationConfig", generationConfig)
             .put("inputAudioTranscription", JSONObject())
             .put("outputAudioTranscription", JSONObject())
+            .put("sessionResumption", resumption)
+            .put(
+                "contextWindowCompression",
+                JSONObject().put("slidingWindow", JSONObject()),
+            )
 
         return JSONObject().put("setup", setup).toString()
+    }
+
+    /** protobuf JSON duration (e.g. "59.5s", "60s") → milliseconds, null if absent. */
+    private fun parseDurationMs(value: String): Long? {
+        if (value.isBlank()) return null
+        val trimmed = value.trim().trimEnd('s')
+        return trimmed.toDoubleOrNull()?.let { (it * 1000).toLong() }
     }
 
     private fun buildUrl(endpoint: String, apiKey: String): String {
