@@ -72,6 +72,13 @@ class SubtitleOverlayController(
     private var grabberRowHeightPx = 0
     private var rowAnimator: ValueAnimator? = null
 
+    /**
+     * Set when a touch began on an interactive child (grabber / resize handle /
+     * close). A quick press-release there must not toggle the strip away — the
+     * user was probably starting a drag.
+     */
+    private var suppressNextToggle = false
+
     private var settings: UserSettings = UserSettings()
     private var sameLanguageMode: Boolean = false
     private var inputText: String = ""
@@ -213,6 +220,23 @@ class SubtitleOverlayController(
     }
 
     /**
+     * A tap on the window toggles the strip: pop it out when hidden, tuck it
+     * away immediately when shown (no need to wait out the 5s timer).
+     */
+    private fun onOverlayTapped() {
+        if (suppressNextToggle) {
+            suppressNextToggle = false
+            return
+        }
+        if (controlsShown) {
+            controlsHandler.removeCallbacks(hideControlsRunnable)
+            hideControlsNow()
+        } else {
+            revealControlsTemporarily()
+        }
+    }
+
+    /**
      * Reveal the control strip — it slides down out of the window's top edge and
      * its space is added back to the caption area — then auto-hide after 5s idle.
      */
@@ -272,11 +296,13 @@ class SubtitleOverlayController(
         row.animate().cancel()
     }
 
-    private val hideControlsRunnable = Runnable {
-        val row = grabberRow ?: return@Runnable
+    private val hideControlsRunnable = Runnable { hideControlsNow() }
+
+    private fun hideControlsNow() {
+        val row = grabberRow ?: return
         controlsShown = false
         cancelRowAnimations(row)
-        val lp = row.layoutParams as? LinearLayout.LayoutParams ?: return@Runnable
+        val lp = row.layoutParams as? LinearLayout.LayoutParams ?: return
         val startH = row.height.coerceIn(0, grabberRowHeightPx)
         row.animate().alpha(0f).setDuration(140).start()
         rowAnimator = ValueAnimator.ofInt(startH, 0).apply {
@@ -386,9 +412,9 @@ class SubtitleOverlayController(
     @SuppressLint("ClickableViewAccessibility")
     private fun buildOverlayView(density: Float): View {
         // Root detects taps anywhere in the window (including areas the caption
-        // ScrollViews consume) so the control strip can be revealed with a tap,
-        // while scrolls/drags still pass through untouched.
-        val root = TapDetectLayout(context) { revealControlsTemporarily() }
+        // ScrollViews consume) so the control strip toggles with a tap, while
+        // scrolls/drags still pass through untouched.
+        val root = TapDetectLayout(context) { onOverlayTapped() }
 
         val bg = GradientDrawable().apply {
             cornerRadius = 12 * density
@@ -441,7 +467,10 @@ class SubtitleOverlayController(
             setTextColor(Color.argb(190, 255, 255, 255))
             gravity = Gravity.CENTER
             contentDescription = context.getString(R.string.overlay_close)
-            setOnClickListener { onCloseRequested() }
+            setOnClickListener {
+                suppressNextToggle = true
+                onCloseRequested()
+            }
         }
         closeButton = close
         grabberRow.addView(close)
@@ -545,7 +574,17 @@ class SubtitleOverlayController(
         // radius. Larger touch target than the visible arc.
         val handleSize = (22 * density).roundToInt()
         val handle = ArcHandleView(context).apply {
-            layoutParams = FrameLayout.LayoutParams(handleSize, handleSize, Gravity.BOTTOM or Gravity.END)
+            layoutParams = FrameLayout.LayoutParams(
+                handleSize,
+                handleSize,
+                Gravity.BOTTOM or Gravity.END,
+            ).apply {
+                // Pull the handle into the root's padding so the view's corner
+                // sits exactly on the window corner — the arc then stays
+                // concentric with the rounded edge instead of drifting inward.
+                rightMargin = -padH
+                bottomMargin = -padH
+            }
         }
         handle.setOnTouchListener(ResizeTouchListener())
         root.addView(handle)
@@ -606,7 +645,7 @@ class SubtitleOverlayController(
             strokeWidth = 2.2f * density
         }
         private val cornerRadius = 12f * density
-        private val arcRadius = 6.5f * density
+        private val arcRadius = 8.5f * density
 
         override fun onDraw(canvas: Canvas) {
             // Arc concentric with the window corner: center sits one corner-radius
@@ -751,6 +790,7 @@ class SubtitleOverlayController(
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
                         holdControlsVisible()
+                        suppressNextToggle = true
                         clampAndApply(persist = false, reason = "move-down")
                         lastX = event.rawX
                         lastY = event.rawY
@@ -806,6 +846,7 @@ class SubtitleOverlayController(
             return try {
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
+                        suppressNextToggle = true
                         clampAndApply(persist = false, reason = "resize-down")
                         lastX = event.rawX
                         lastY = event.rawY
