@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import com.livetranslate.app.R
 import java.io.File
 import java.io.FileOutputStream
 import java.time.LocalDateTime
@@ -25,15 +26,15 @@ object ExportTranslator {
     ): String {
         val timeLabel = stoppedAt.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
         return buildString {
-            appendLine("# 翻译结果")
+            appendLine(AppStrings.get(R.string.export_title))
             appendLine()
-            appendLine("- 停止时间：`$timeLabel`")
+            appendLine(AppStrings.get(R.string.export_stopped_at, timeLabel))
             appendLine()
-            appendLine("## 原文")
+            appendLine(AppStrings.get(R.string.export_source))
             appendLine()
             appendLine(formatExportBody(sourceText))
             appendLine()
-            appendLine("## 译文")
+            appendLine(AppStrings.get(R.string.export_translation))
             appendLine()
             appendLine(formatExportBody(translationText))
             appendLine()
@@ -42,16 +43,16 @@ object ExportTranslator {
 
     private fun formatExportBody(text: String): String {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return "（无）"
+        if (trimmed.isEmpty()) return AppStrings.get(R.string.export_empty)
         return TranscriptLineBreaker.formatForMarkdown(trimmed)
     }
 
-    /** e.g. 7月14日-22:35-翻译结果.md */
+    /** e.g. zh: 7月14日-22:35-翻译结果.md · en: Translation-0714-22-35.md */
     fun fileName(stoppedAt: LocalDateTime = LocalDateTime.now()): String {
         val month = stoppedAt.monthValue
         val day = stoppedAt.dayOfMonth
         val hm = stoppedAt.format(DateTimeFormatter.ofPattern("HH:mm"))
-        return "${month}月${day}日-$hm-翻译结果.md"
+        return AppStrings.get(R.string.export_file_name, month, day, hm)
     }
 
     /**
@@ -69,9 +70,9 @@ object ExportTranslator {
                 }
                 val resolver = context.contentResolver
                 val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                    ?: error("无法创建下载文件")
+                    ?: error(AppStrings.get(R.string.export_error_create))
                 resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                    ?: error("无法写入文件")
+                    ?: error(AppStrings.get(R.string.export_error_write))
                 values.clear()
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)

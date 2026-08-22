@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.os.Build
 import com.livetranslate.app.data.ApiKeyStore
 import com.livetranslate.app.data.UserSettingsRepository
+import com.livetranslate.app.util.AppStrings
 
 class LiveTranslateApp : Application() {
     lateinit var settingsRepository: UserSettingsRepository
@@ -15,6 +16,7 @@ class LiveTranslateApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        AppStrings.init(this)
         settingsRepository = UserSettingsRepository(this)
         apiKeyStore = ApiKeyStore(this)
         createNotificationChannels()

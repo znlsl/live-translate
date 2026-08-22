@@ -6,6 +6,8 @@ import android.media.AudioPlaybackCaptureConfiguration
 import android.media.AudioRecord
 import android.media.projection.MediaProjection
 import android.util.Log
+import com.livetranslate.app.R
+import com.livetranslate.app.util.AppStrings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -58,7 +60,7 @@ class SystemAudioCapturer(
 
         if (record.state != AudioRecord.STATE_INITIALIZED) {
             record.release()
-            throw IllegalStateException("AudioRecord 初始化失败，无法内录系统音频")
+            throw IllegalStateException(AppStrings.get(R.string.error_capture_init_system))
         }
 
         audioRecord = record
@@ -86,14 +88,14 @@ class SystemAudioCapturer(
                         // of busy-spinning, then give up and report.
                         zeroStreak++
                         if (zeroStreak >= ZERO_READ_LIMIT) {
-                            onError("系统音频采集停滞（AudioRecord 持续无数据）")
+                            onError(AppStrings.get(R.string.error_capture_stalled_system))
                             break
                         }
                         delay(20)
                     }
                     else -> {
                         Log.w(TAG, "AudioRecord read error: $n")
-                        onError("系统音频采集读取失败：$n")
+                        onError(AppStrings.get(R.string.error_capture_read_system, n))
                         break
                     }
                 }

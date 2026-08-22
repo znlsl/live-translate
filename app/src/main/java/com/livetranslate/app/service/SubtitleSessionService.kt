@@ -25,6 +25,7 @@ import com.livetranslate.app.data.UserSettings
 import com.livetranslate.app.live.LiveTranslateClient
 import com.livetranslate.app.overlay.SubtitleOverlayController
 import com.livetranslate.app.ui.main.MainActivity
+import com.livetranslate.app.util.AppStrings
 import com.livetranslate.app.util.SameLanguageCaptionMode
 import com.livetranslate.app.util.TranscriptBuffer
 import com.livetranslate.app.util.TranscriptLineBreaker
@@ -86,7 +87,7 @@ class SubtitleSessionService : Service() {
         commandJob = scope.launch {
             SessionBus.commands.collect { cmd ->
                 when (cmd) {
-                    SessionBus.Command.Stop -> stopEverything("已停止")
+                    SessionBus.Command.Stop -> stopEverything(AppStrings.get(R.string.status_stopped))
                 }
             }
         }
@@ -95,7 +96,7 @@ class SubtitleSessionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                stopEverything("已停止")
+                stopEverything(AppStrings.get(R.string.status_stopped))
             }
             ACTION_START -> {
                 val modeName = intent.getStringExtra(EXTRA_AUDIO_SOURCE)
@@ -112,7 +113,7 @@ class SubtitleSessionService : Service() {
                         // Must still hit startForeground before stopSelf when
                         // launched via startForegroundService (API 26+).
                         startAsForeground()
-                        SessionBus.setStatus(SessionBus.Status.Error, "录屏授权失败")
+                        SessionBus.setStatus(SessionBus.Status.Error, AppStrings.get(R.string.error_projection_denied))
                         stopSelf()
                     } else {
                         startSession(resultCode, data)
@@ -134,11 +135,11 @@ class SubtitleSessionService : Service() {
         // A previous session may still be alive (double-tap / callback race) —
         // tear it down synchronously first so overlays and pipelines never double.
         if (sessionJob?.isActive == true || eventsJob?.isActive == true || overlay != null) {
-            stopEverything("重新启动")
+            stopEverything(AppStrings.get(R.string.status_restarting))
         }
         stopping = false
         reconnectAttempts = 0
-        SessionBus.setStatus(SessionBus.Status.Starting, "正在启动…")
+        SessionBus.setStatus(SessionBus.Status.Starting, AppStrings.get(R.string.status_starting))
         SessionBus.clearExport()
         accumulatedInput.clear()
         accumulatedOutput.clear()
@@ -155,7 +156,7 @@ class SubtitleSessionService : Service() {
 
         val app = application as LiveTranslateApp
         if (!app.apiKeyStore.hasApiKey()) {
-            SessionBus.setStatus(SessionBus.Status.Error, "请先在设置中填写 API Key")
+            SessionBus.setStatus(SessionBus.Status.Error, AppStrings.get(R.string.msg_need_api_key))
             stopSelf()
             return
         }
@@ -169,7 +170,7 @@ class SubtitleSessionService : Service() {
                 // e.g. SecurityException from getMediaProjection, BadTokenException
                 // from addView when overlay permission was revoked mid-session.
                 Log.e(TAG, "session start failed", e)
-                stopEverything(e.message ?: "会话启动失败", error = true)
+                stopEverything(e.message ?: AppStrings.get(R.string.error_session_start_failed), error = true)
             }
         }
     }
@@ -187,15 +188,15 @@ class SubtitleSessionService : Service() {
                 val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
                 val projection = mpm.getMediaProjection(resultCode!!, data!!)
                 if (projection == null) {
-                    SessionBus.setStatus(SessionBus.Status.Error, "无法创建 MediaProjection")
-                    stopEverything("无法创建 MediaProjection", error = true)
+                    SessionBus.setStatus(SessionBus.Status.Error, AppStrings.get(R.string.error_no_projection))
+                    stopEverything(AppStrings.get(R.string.error_no_projection), error = true)
                     return
                 }
                 mediaProjection = projection
                 projection.registerCallback(
                     object : MediaProjection.Callback() {
                         override fun onStop() {
-                            stopEverything("录屏权限已撤销")
+                            stopEverything(AppStrings.get(R.string.error_projection_revoked))
                         }
                     },
                     null,
@@ -213,7 +214,7 @@ class SubtitleSessionService : Service() {
                 },
                 // The overlay is the caption surface; closing it ends the session
                 // (transcripts are still kept for export via markSessionFinished).
-                onCloseRequested = { stopEverything("已关闭") },
+                onCloseRequested = { stopEverything(AppStrings.get(R.string.status_closed_by_user)) },
             )
             overlay = overlayController
             overlayController.show(currentSettings)
@@ -232,14 +233,14 @@ class SubtitleSessionService : Service() {
                         when (state) {
                             is LiveTranslateClient.ConnectionState.Ready -> {
                                 reconnectAttempts = 0
-                                SessionBus.setStatus(SessionBus.Status.Running, "翻译中")
+                                SessionBus.setStatus(SessionBus.Status.Running, AppStrings.get(R.string.status_translating))
                                 startCapturePipeline(client)
                             }
                             is LiveTranslateClient.ConnectionState.Failed -> {
                                 handleConnectionLoss(state.message)
                             }
                             is LiveTranslateClient.ConnectionState.Closed -> {
-                                handleConnectionLoss("连接已断开")
+                                handleConnectionLoss(AppStrings.get(R.string.error_disconnected))
                             }
                             else -> Unit
                         }
@@ -258,7 +259,7 @@ class SubtitleSessionService : Service() {
                     when (event) {
                         is LiveTranslateClient.LiveEvent.SetupComplete -> {
                             reconnectAttempts = 0
-                            SessionBus.setStatus(SessionBus.Status.Running, "翻译中")
+                            SessionBus.setStatus(SessionBus.Status.Running, AppStrings.get(R.string.status_translating))
                             startCapturePipeline(client)
                         }
                         is LiveTranslateClient.LiveEvent.InputTranscript -> {
@@ -292,7 +293,7 @@ class SubtitleSessionService : Service() {
                         is LiveTranslateClient.LiveEvent.GoAway -> {
                             // Connection is about to be terminated by the server
                             // (~10-minute cap) — resume on a fresh connection.
-                            scheduleReconnect("服务端连接即将到期")
+                            scheduleReconnect(AppStrings.get(R.string.status_server_goaway))
                         }
                         is LiveTranslateClient.LiveEvent.Error -> {
                             handleConnectionLoss(event.message)
@@ -329,8 +330,8 @@ class SubtitleSessionService : Service() {
             // Rotate keys: try first available via round-robin start index
             val key = app.apiKeyStore.nextRotatedKey()
             if (key.isBlank()) {
-                SessionBus.setStatus(SessionBus.Status.Error, "请先在设置中填写 API Key")
-                stopEverything("请先在设置中填写 API Key", error = true)
+                SessionBus.setStatus(SessionBus.Status.Error, AppStrings.get(R.string.msg_need_api_key))
+                stopEverything(AppStrings.get(R.string.msg_need_api_key), error = true)
                 return
             }
             client.connect(
@@ -385,7 +386,7 @@ class SubtitleSessionService : Service() {
         Log.w(TAG, "reconnect #$attempt after: $reason")
         SessionBus.setStatus(
             SessionBus.Status.Starting,
-            "连接中断（$reason），正在自动续接…（$attempt/$MAX_RECONNECTS）",
+            AppStrings.get(R.string.status_reconnecting, reason, attempt, MAX_RECONNECTS),
         )
         reconnectJob = scope.launch {
             delay(RECONNECT_BASE_DELAY_MS * attempt)
@@ -394,7 +395,7 @@ class SubtitleSessionService : Service() {
             val app = application as LiveTranslateApp
             val key = app.apiKeyStore.nextRotatedKey()
             if (key.isBlank()) {
-                stopEverything("请先在设置中填写 API Key", error = true)
+                stopEverything(AppStrings.get(R.string.msg_need_api_key), error = true)
                 return@launch
             }
             live.connect(
@@ -423,7 +424,7 @@ class SubtitleSessionService : Service() {
             when (audioSourceMode) {
                 AudioSourceMode.MEDIA -> {
                     val projection = mediaProjection
-                        ?: throw IllegalStateException("缺少 MediaProjection")
+                        ?: throw IllegalStateException(AppStrings.get(R.string.error_missing_projection))
                     val cap = SystemAudioCapturer(ioScope)
                     mediaCapturer = cap
                     cap.start(projection, { pcm -> client.sendPcm16le(pcm, 16_000) }, onCaptureError)
@@ -435,7 +436,7 @@ class SubtitleSessionService : Service() {
                 }
                 AudioSourceMode.MEDIA_AND_MIC -> {
                     val projection = mediaProjection
-                        ?: throw IllegalStateException("缺少 MediaProjection")
+                        ?: throw IllegalStateException(AppStrings.get(R.string.error_missing_projection))
                     val mixer = PcmMixer { mixed -> client.sendPcm16le(mixed, 16_000) }
                     pcmMixer = mixer
                     val media = SystemAudioCapturer(ioScope)
@@ -446,11 +447,11 @@ class SubtitleSessionService : Service() {
                     mic.start({ pcm -> mixer.offerMic(pcm) }, onCaptureError)
                 }
             }
-            SessionBus.setStatus(SessionBus.Status.Running, "翻译中 · 等待声音…")
+            SessionBus.setStatus(SessionBus.Status.Running, AppStrings.get(R.string.status_waiting_audio))
         } catch (e: Exception) {
             Log.e(TAG, "capture start failed", e)
-            SessionBus.setStatus(SessionBus.Status.Error, e.message ?: "音频采集启动失败")
-            stopEverything(e.message ?: "音频采集启动失败")
+            SessionBus.setStatus(SessionBus.Status.Error, e.message ?: AppStrings.get(R.string.error_capture_start_failed))
+            stopEverything(e.message ?: AppStrings.get(R.string.error_capture_start_failed))
         }
     }
 

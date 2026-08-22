@@ -24,6 +24,8 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
+import com.livetranslate.app.R
+import com.livetranslate.app.util.AppStrings
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -148,11 +150,11 @@ class LiveTranslateClient {
 
         val key = config.apiKey.trim()
         if (key.isBlank()) {
-            fail("API Key 为空")
+            fail(AppStrings.get(R.string.client_error_api_key_empty))
             return
         }
         if (config.endpoint.trim().isBlank()) {
-            fail("端点为空")
+            fail(AppStrings.get(R.string.client_error_endpoint_empty))
             return
         }
 
@@ -177,7 +179,7 @@ class LiveTranslateClient {
                     Log.i(TAG, "setup payload: $setup")
                     val ok = webSocket.send(setup)
                     if (!ok) {
-                        fail("发送 setup 失败（socket 未就绪）")
+                        fail(AppStrings.get(R.string.client_error_send_setup))
                     }
                 }
 
@@ -210,7 +212,13 @@ class LiveTranslateClient {
                     if (isStale(webSocket)) return
                     Log.i(TAG, "WebSocket closing: $code $reason")
                     if (!intentionalClose.get() && !setupComplete.get()) {
-                        fail("连接在 setup 完成前关闭: $code ${reason.ifBlank { "(no reason)" }}")
+                        fail(
+                            AppStrings.get(
+                                R.string.client_error_closed_before_setup,
+                                code,
+                                reason.ifBlank { "(no reason)" },
+                            ),
+                        )
                     }
                     webSocket.close(code, reason)
                 }
@@ -223,7 +231,13 @@ class LiveTranslateClient {
                         return
                     }
                     if (!setupComplete.get() && _connectionState.value !is ConnectionState.Failed) {
-                        fail("连接关闭: $code ${reason.ifBlank { "(no reason)" }}")
+                        fail(
+                            AppStrings.get(
+                                R.string.client_error_closed,
+                                code,
+                                reason.ifBlank { "(no reason)" },
+                            ),
+                        )
                     } else if (_connectionState.value !is ConnectionState.Failed) {
                         _connectionState.value = ConnectionState.Closed
                     }
@@ -246,11 +260,11 @@ class LiveTranslateClient {
             while (System.currentTimeMillis() < deadline) {
                 when (val state = _connectionState.value) {
                     is ConnectionState.Ready ->
-                        return Result.success("连接成功：setupComplete / Ready")
+                        return Result.success(AppStrings.get(R.string.test_ok_setup))
                     is ConnectionState.Failed ->
                         return Result.failure(Exception(state.message))
                     is ConnectionState.Closed ->
-                        return Result.failure(Exception("连接已关闭，未完成 setup"))
+                        return Result.failure(Exception(AppStrings.get(R.string.test_closed_no_setup)))
                     else -> delay(40)
                 }
             }
@@ -258,9 +272,9 @@ class LiveTranslateClient {
             val detail = when (state) {
                 is ConnectionState.Failed -> state.message
                 is ConnectionState.Connecting ->
-                    "WebSocket 一直 Connecting：多半连不上 generativelanguage.googleapis.com（网络/代理/防火墙）。端点本身是正确的。"
-                is ConnectionState.Ready -> "连接成功"
-                else -> "超时 ${timeoutMs}ms，状态=$state"
+                    AppStrings.get(R.string.test_connecting_hint)
+                is ConnectionState.Ready -> AppStrings.get(R.string.test_ok)
+                else -> AppStrings.get(R.string.test_timeout, timeoutMs, state)
             }
             if (state is ConnectionState.Ready) {
                 Result.success(detail)

@@ -10,6 +10,8 @@ import com.livetranslate.app.data.SupportedLanguages
 import com.livetranslate.app.data.UserSettings
 import com.livetranslate.app.data.UserSettingsRepository
 import com.livetranslate.app.live.LiveTranslateClient
+import com.livetranslate.app.util.AppStrings
+import com.livetranslate.app.R
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -78,12 +80,12 @@ class SettingsViewModel(
     fun testConnection() {
         viewModelScope.launch {
             _testing.value = true
-            _testResult.value = "测试中…"
+            _testResult.value = AppStrings.get(R.string.settings_test_running)
             val s = settings.value
             // Persist drafts first
             val keys = _apiKeyFields.value.map { it.text.trim() }.filter { it.isNotEmpty() }
             if (keys.isEmpty()) {
-                _testResult.value = "失败：API Key 为空"
+                _testResult.value = AppStrings.get(R.string.settings_test_key_empty_fail)
                 _testing.value = false
                 return@launch
             }
@@ -97,9 +99,9 @@ class SettingsViewModel(
             var okCount = 0
             for ((i, key) in keys.withIndex()) {
                 val n = i + 1
-                _testResult.value = "测试中… Key $n / ${keys.size}"
+                _testResult.value = AppStrings.get(R.string.settings_test_running_key, n, keys.size)
                 if (key.length < 16) {
-                    lines += "❌ Key $n：太短"
+                    lines += AppStrings.get(R.string.settings_test_key_too_short, n)
                     continue
                 }
                 val client = LiveTranslateClient()
@@ -114,9 +116,13 @@ class SettingsViewModel(
                 client.destroy()
                 if (result.isSuccess) {
                     okCount++
-                    lines += "✅ Key $n 可用：${result.getOrNull()}"
+                    lines += AppStrings.get(R.string.settings_test_key_ok, n, result.getOrNull().orEmpty())
                 } else {
-                    lines += "❌ Key $n：${result.exceptionOrNull()?.message.orEmpty()}"
+                    lines += AppStrings.get(
+                        R.string.settings_test_key_fail,
+                        n,
+                        result.exceptionOrNull()?.message.orEmpty(),
+                    )
                 }
             }
 
@@ -124,9 +130,9 @@ class SettingsViewModel(
                 append(lines.joinToString("\n"))
                 append('\n')
                 when {
-                    okCount == keys.size -> append("全部 ${keys.size} 个 Key 可用")
-                    okCount > 0 -> append("$okCount / ${keys.size} 个 Key 可用")
-                    else -> append("提示：请检查网络、端点、模型 ID 与 API Key。")
+                    okCount == keys.size -> append(AppStrings.get(R.string.settings_test_all_ok, keys.size))
+                    okCount > 0 -> append(AppStrings.get(R.string.settings_test_some_ok, okCount, keys.size))
+                    else -> append(AppStrings.get(R.string.settings_test_hint))
                 }
             }
             _testing.value = false
