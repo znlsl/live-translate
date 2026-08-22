@@ -424,6 +424,9 @@ class SubtitleOverlayController(
         val padH = (10 * density).roundToInt()
         val padV = (6 * density).roundToInt()
         root.setPadding(padH, padV, padH, padH)
+        // The resize handle tucks into the padding to hug the corner; without
+        // this it would be clipped away (clipToPadding defaults to true).
+        root.clipToPadding = false
 
         val column = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -579,11 +582,10 @@ class SubtitleOverlayController(
                 handleSize,
                 Gravity.BOTTOM or Gravity.END,
             ).apply {
-                // Pull the handle into the root's padding so the view's corner
-                // sits exactly on the window corner — the arc then stays
-                // concentric with the rounded edge instead of drifting inward.
-                rightMargin = -padH
-                bottomMargin = -padH
+                // Nudge the handle halfway into the root's padding so the arc
+                // sits closer to the corner without crowding the edge.
+                rightMargin = -(padH / 2)
+                bottomMargin = -(padH / 2)
             }
         }
         handle.setOnTouchListener(ResizeTouchListener())
