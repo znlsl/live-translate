@@ -66,7 +66,11 @@ class SystemAudioCapturer(
         record.startRecording()
 
         captureJob = scope.launch(Dispatchers.IO) {
-            val readBuf = ShortArray(bufferSize / 2)
+            // Read in ~100ms chunks so the first transcript appears sooner: the
+            // AudioRecord only returns once a read fills, so a large read buffer
+            // adds that much latency before audio reaches the model. The underlying
+            // bufferSize stays large to avoid underruns; only the read size shrinks.
+            val readBuf = ShortArray(READ_CHUNK_SAMPLES)
             val resampler = PcmResampler(sourceRate, 16_000)
             while (isActive && running) {
                 val n = record.read(readBuf, 0, readBuf.size)
@@ -107,5 +111,8 @@ class SystemAudioCapturer(
 
     companion object {
         private const val TAG = "SystemAudioCapturer"
+        private const val SOURCE_RATE = 44_100
+        // ~100ms of audio at 44.1 kHz: smaller reads reach the model sooner.
+        private const val READ_CHUNK_SAMPLES = SOURCE_RATE / 10
     }
 }
