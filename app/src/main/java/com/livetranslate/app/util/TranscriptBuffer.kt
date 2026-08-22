@@ -24,9 +24,48 @@ object TranscriptBuffer {
         if (maxChars > 0 && buffer.length > maxChars) {
             var cut = buffer.length - maxChars
             if (cut < buffer.length && buffer[cut].isLowSurrogate()) cut++
+            cut = alignCutToSentenceBoundary(buffer, cut)
             if (cut > 0) buffer.delete(0, cut)
         }
     }
+
+    /**
+     * Move the cut point forward past any partial sentence so truncation drops
+     * whole sentences instead of splitting one mid-way — a mid-sentence cut
+     * changes the laid-out line count mid-stream and makes the overlay jump.
+     *
+     * Looks for the next sentence terminator at or after [startCut] (within a
+     * small window) and returns the index just after it. Falls back to the
+     * original [startCut] if no terminator is found nearby, so the cap is
+     * still respected.
+     */
+    internal fun alignCutToSentenceBoundary(buffer: CharSequence, startCut: Int): Int {
+        if (startCut <= 0 || startCut >= buffer.length) return startCut
+        val window = 64
+        val limit = minOf(startCut + window, buffer.length)
+        var i = startCut
+        while (i < limit) {
+            if (isSentenceEnd(buffer[i])) {
+                var end = i + 1
+                // skip trailing closing quotes/brackets
+                while (end < buffer.length && buffer[end] in CLOSERS) end++
+                // skip one joining space so the kept text starts cleanly
+                if (end < buffer.length && buffer[end] == ' ') end++
+                return end.coerceAtMost(buffer.length)
+            }
+            i++
+        }
+        return startCut
+    }
+
+    private fun isSentenceEnd(c: Char): Boolean =
+        c == '。' || c == '．' || c == '！' || c == '？' ||
+            c == '.' || c == '!' || c == '?' || c == '…' || c == '\n'
+
+    private val CLOSERS = charArrayOf(
+        '”', '’', '"', '\'',
+        '」', '』', '）', ')', '】', '》', '>',
+    )
 
     /**
      * Drops spaces that landed between two CJK letters (ours or the model's).

@@ -71,4 +71,46 @@ class TranscriptBufferTest {
         val gapped = "好的。嗯。然后他就走 了。后来我们去了公园。下一段从这里开始。"
         assertEquals(TranscriptLineBreaker.format(clean), TranscriptLineBreaker.format(gapped))
     }
+
+    @Test
+    fun truncationDropsWholeSentencesNotHalf() {
+        val sentences = "这是第一句话。这是第二句话。这是第三句话。这是第四句话。"
+        val buf = StringBuilder()
+        // Fill past the cap so a truncation happens.
+        TranscriptBuffer.append(buf, sentences + sentences, maxChars = 40)
+        val kept = buf.toString()
+        // Kept text must start at a sentence boundary, never mid-sentence.
+        assertTrue(
+            "expected kept text to start after a '。', was: \"$kept\"",
+            kept.startsWith("这是") && kept.indexOf("这是第一句") != 0,
+        )
+        assertTrue(kept.length <= 40)
+    }
+
+    @Test
+    fun alignCutToSentenceBoundaryMovesPastTerminator() {
+        // Cut lands mid-sentence; should advance to just after the next '。'.
+        val text = "你好这是一个完整句子。然后是下一句开始的部分"
+        val cut = TranscriptBuffer.alignCutToSentenceBoundary(text, 4)
+        assertEquals("你好这是一个完整句子。".length, cut)
+    }
+
+    @Test
+    fun alignCutToSentenceBoundaryFallsBackWhenNoTerminatorNearby() {
+        val text = "一段没有任何句号的长文本继续继续继续继续继续"
+        val cut = TranscriptBuffer.alignCutToSentenceBoundary(text, 6)
+        // No terminator within the window → unchanged.
+        assertEquals(6, cut)
+    }
+
+    @Test
+    fun truncationRespectsSurrogateBoundary() {
+        // Emoji is a surrogate pair; truncation must not split it.
+        val text = "😀😀😀😀😀😀😀😀这是一段话用于触发截断的填充内容。"
+        val buf = StringBuilder()
+        TranscriptBuffer.append(buf, text, maxChars = 12)
+        // No lone high/low surrogate should remain at the head.
+        val kept = buf.toString()
+        assertFalse(kept.isNotEmpty() && kept[0].isHighSurrogate() && kept.length > 1 && !kept[1].isLowSurrogate())
+    }
 }

@@ -465,6 +465,12 @@ class SubtitleOverlayController(
      * Auto-scroll policy: do NOT chase every character.
      * Only when the TextView's laid-out line count increases (a line filled and wrapped),
      * scroll so the newest line is visible — typically one line height at a time.
+     *
+     * When the display buffer is truncated from the head (long session), the laid-out
+     * line count briefly drops. We must NOT snap to top in that case — that is what
+     * makes the caption "jump" up and down. Only a real reset (text replaced with
+     * something much shorter) snaps to top; truncation keeps the view anchored at the
+     * bottom so the newest line stays visible.
      */
     private fun scheduleLineScroll(
         textView: TextView,
@@ -480,22 +486,21 @@ class SubtitleOverlayController(
             }.coerceAtLeast(0)
 
             val previous = if (isInput) lastInputLineCount else lastOutputLineCount
+            val textLen = textView.text?.length ?: 0
 
-            // Text shrank (reset / mode switch) — snap baseline, no flashy scroll
-            if (lineCount < previous) {
-                if (isInput) lastInputLineCount = lineCount else lastOutputLineCount = lineCount
-                scrollView.scrollTo(0, 0)
-                return@post
+            when (scrollAction(lineCount, previous, textLen)) {
+                ScrollAction.ResetToTop -> {
+                    if (isInput) lastInputLineCount = lineCount else lastOutputLineCount = lineCount
+                    scrollView.scrollTo(0, 0)
+                }
+                ScrollAction.HoldSteady -> {
+                    // Line count did not increase — keep eyes steady, no scroll.
+                }
+                ScrollAction.ShowLastLine -> {
+                    if (isInput) lastInputLineCount = lineCount else lastOutputLineCount = lineCount
+                    scrollToShowLastLine(textView, scrollView)
+                }
             }
-
-            // Same line still filling in — keep eyes steady, no scroll
-            if (lineCount <= previous) {
-                return@post
-            }
-
-            // New line(s) completed — scroll so the last line is fully visible
-            if (isInput) lastInputLineCount = lineCount else lastOutputLineCount = lineCount
-            scrollToShowLastLine(textView, scrollView)
         }
     }
 
@@ -630,10 +635,44 @@ class SubtitleOverlayController(
         }
     }
 
+    /**
+     * Decision for [scheduleLineScroll] based on how the laid-out line count and
+     * text length changed since the last update.
+     */
+    enum class ScrollAction { ResetToTop, HoldSteady, ShowLastLine }
+
     companion object {
         private const val TAG = "SubtitleOverlay"
         private const val MIN_WIDTH_PX = 200
         private const val MIN_HEIGHT_PX = 80
         private const val EDGE_MARGIN_PX = 8
+
+        /**
+         * Pure decision: given the current line count, the previous one, and the
+         * current text length, decide how to scroll.
+         *
+         * - Lines grew → show the newest line.
+         * - Lines shrank because the head was truncated (text is still long) → keep
+         *   anchored at the bottom (ShowLastLine), NOT top. This is the fix for the
+         *   ~7-minute "jumping up and down" bug: head truncation used to snap to top.
+         * - Lines shrank to almost nothing → real reset (clear / mode switch) → top.
+         * - No change → hold steady.
+         */
+        fun scrollAction(
+            lineCount: Int,
+            previousLineCount: Int,
+            textLength: Int,
+        ): ScrollAction {
+            if (lineCount > previousLineCount) return ScrollAction.ShowLastLine
+            if (lineCount == previousLineCount) return ScrollAction.HoldSteady
+            // lineCount < previousLineCount: distinguish truncation from reset.
+            return if (lineCount <= 1 && textLength < 32) {
+                ScrollAction.ResetToTop
+            } else {
+                // Truncation dropped a few lines from the head but text is still
+                // substantial — stay anchored to the newest content.
+                ScrollAction.ShowLastLine
+            }
+        }
     }
 }

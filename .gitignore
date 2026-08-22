@@ -30,6 +30,7 @@ Thumbs.db
 *~
 .vscode/
 .fleet/
+.zcode/
 
 # Nested third-party clone (use Maven dependency instead)
 # Keep folder on disk for reference if present; do not publish as part of this app.
