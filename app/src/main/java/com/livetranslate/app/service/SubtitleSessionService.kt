@@ -168,13 +168,19 @@ class SubtitleSessionService : Service() {
                 )
             }
 
-            val overlayController = SubtitleOverlayController(this@SubtitleSessionService) { x, y, w, h ->
-                ioScope.launch {
-                    app.settingsRepository.update {
-                        it.copy(overlayX = x, overlayY = y, overlayWidthDp = w, overlayHeightDp = h)
+            val overlayController = SubtitleOverlayController(
+                this@SubtitleSessionService,
+                onGeometryChanged = { x, y, w, h ->
+                    ioScope.launch {
+                        app.settingsRepository.update {
+                            it.copy(overlayX = x, overlayY = y, overlayWidthDp = w, overlayHeightDp = h)
+                        }
                     }
-                }
-            }
+                },
+                // The overlay is the caption surface; closing it ends the session
+                // (transcripts are still kept for export via markSessionFinished).
+                onCloseRequested = { stopEverything("已关闭") },
+            )
             overlay = overlayController
             overlayController.show(currentSettings)
 

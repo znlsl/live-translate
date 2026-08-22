@@ -5,6 +5,7 @@
     <string name="notification_subtitle_running">Live subtitles running</string>
     <string name="notification_subtitle_text">Capturing system audio and translating</string>
     <string name="action_stop">Stop</string>
+    <string name="overlay_close">Close captions</string>
 
     <string name="tab_subtitle">Subtitles</string>
     <string name="tab_settings">Settings</string>

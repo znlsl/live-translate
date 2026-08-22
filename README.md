@@ -16,7 +16,7 @@ The app can capture **other apps' playback**, the **microphone**, or both, send 
 |------|-------------|
 | **Subtitles tab** | Target language (remembered; source is auto-detected), audio source, start / stop, status and preview |
 | **Audio source** | Media / microphone / media+mic (remembered; mic-only skips screen-capture permission) |
-| **Floating overlay** | Over other apps; thin top grabber to move; corner handle to resize (font size unchanged) |
+| **Floating overlay** | Over other apps; top control strip (move + close) shows for 5s then tucks away — tap the captions to bring it back; corner arc handle resizes the box (font size unchanged) |
 | **Display modes** | Translation only, or bilingual (source + translation with a divider). If the audio is already in the target language, the overlay collapses to a single line |
 | **Auto-scroll** | Separate panes for source / translation; **scrolls one line only when a line wraps**. Display text is also split after sentence-ending punctuation once a line is long enough, so the stream stays readable. |
 | **Audio capture** | Media: `MediaProjection` + `AudioPlaybackCapture`; mic: `AudioRecord` → 16 kHz PCM |

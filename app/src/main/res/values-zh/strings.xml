@@ -5,6 +5,7 @@
     <string name="notification_subtitle_running">实时字幕运行中</string>
     <string name="notification_subtitle_text">正在捕获系统音频并翻译</string>
     <string name="action_stop">停止</string>
+    <string name="overlay_close">关闭字幕</string>
 
     <string name="tab_subtitle">字幕</string>
     <string name="tab_settings">设置</string>

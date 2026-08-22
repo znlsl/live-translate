@@ -4,11 +4,16 @@ import android.annotation.SuppressLint
 import android.content.ComponentCallbacks
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -19,6 +24,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.livetranslate.app.R
 import com.livetranslate.app.data.UserSettings
 import kotlin.math.max
 import kotlin.math.min
@@ -26,8 +32,9 @@ import kotlin.math.roundToInt
 
 /**
  * Floating subtitle window using classic Views (reliable with WindowManager).
- * - thin top grabber to move
- * - bottom-right handle to resize box only (font size unchanged)
+ * - top control strip (grabber + close button): shown for 5s on start, then
+ *   slides away; tap the captions to reveal it again, it auto-hides after 5s idle
+ * - corner arc handle to resize box only (font size unchanged)
  * - clamps size/position on orientation change so the handle never goes off-screen
  * - bilingual: source + divider + translation, each with independent auto-scroll
  * - translation-only: single auto-scrolling pane
@@ -37,6 +44,7 @@ import kotlin.math.roundToInt
 class SubtitleOverlayController(
     private val context: Context,
     private val onGeometryChanged: (x: Int, y: Int, widthDp: Int, heightDp: Int) -> Unit,
+    private val onCloseRequested: () -> Unit = {},
 ) {
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var rootView: View? = null
@@ -49,6 +57,13 @@ class SubtitleOverlayController(
     private var dividerView: View? = null
     private var inputSection: LinearLayout? = null
     private var container: LinearLayout? = null
+    private var grabberRow: FrameLayout? = null
+    private var closeButton: View? = null
+
+    /** Top control strip (grabber + close): reveal on tap, auto-hide when idle. */
+    private val controlsHandler = Handler(Looper.getMainLooper())
+    private var controlsShown = false
+    private var grabberRowHeightPx = 0
 
     private var settings: UserSettings = UserSettings()
     private var sameLanguageMode: Boolean = false
@@ -124,6 +139,8 @@ class SubtitleOverlayController(
         applySettingsToViews()
         applyTranscriptsToViews()
         persistGeometry()
+        // Control strip greets the user for 5s, then tucks itself away.
+        revealControlsTemporarily()
     }
 
     fun updateSettings(value: UserSettings) {
@@ -163,6 +180,9 @@ class SubtitleOverlayController(
 
     fun hide() {
         unregisterCallbacks()
+        controlsHandler.removeCallbacksAndMessages(null)
+        controlsShown = false
+        grabberRow?.animate()?.cancel()
         val view = rootView ?: return
         runCatching { windowManager.removeView(view) }
         rootView = null
@@ -174,11 +194,71 @@ class SubtitleOverlayController(
         dividerView = null
         inputSection = null
         container = null
+        grabberRow = null
+        closeButton = null
         sameLanguageMode = false
         inputText = ""
         outputText = ""
         lastInputLineCount = 0
         lastOutputLineCount = 0
+    }
+
+    /** Reveal the control strip and auto-hide it again after 5s of inactivity. */
+    private fun revealControlsTemporarily() {
+        if (rootView == null) return
+        if (!controlsShown) {
+            controlsShown = true
+            val row = grabberRow ?: return
+            row.clearAnimation()
+            row.animate().cancel()
+            row.isEnabled = true
+            row.visibility = View.VISIBLE
+            row.alpha = 0f
+            row.translationY = -grabberRowHeightPx * 0.7f
+            row.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(180)
+                .start()
+        }
+        scheduleControlsHide()
+    }
+
+    /** Keep the strip visible while the user is actively dragging it. */
+    private fun holdControlsVisible() {
+        controlsHandler.removeCallbacks(hideControlsRunnable)
+        if (!controlsShown) {
+            controlsShown = true
+            val row = grabberRow ?: return
+            row.isEnabled = true
+            row.visibility = View.VISIBLE
+            row.alpha = 1f
+            row.translationY = 0f
+        }
+    }
+
+    private fun scheduleControlsHide() {
+        controlsHandler.removeCallbacks(hideControlsRunnable)
+        controlsHandler.postDelayed(hideControlsRunnable, CONTROLS_AUTO_HIDE_MS)
+    }
+
+    private val hideControlsRunnable = Runnable {
+        val row = grabberRow ?: return@Runnable
+        controlsShown = false
+        row.animate()
+            .alpha(0f)
+            .translationY(-grabberRowHeightPx * 0.7f)
+            .setDuration(220)
+            .withEndAction {
+                if (!controlsShown) {
+                    // INVISIBLE keeps the layout stable; disabled so the hidden
+                    // strip doesn't swallow drags meant for the captions.
+                    row.isEnabled = false
+                    row.visibility = View.INVISIBLE
+                    row.translationY = 0f
+                }
+            }
+            .start()
     }
 
     private fun clampAndApply(persist: Boolean, reason: String) {
@@ -283,13 +363,17 @@ class SubtitleOverlayController(
         }
         container = column
 
-        // Thin grabber
+        // Thin grabber row: drag anywhere on the row to move; close button at the
+        // far right. The whole strip reveals on tap and auto-hides when idle.
+        val rowHeight = (22 * density).roundToInt()
+        grabberRowHeightPx = rowHeight
         val grabberRow = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                (22 * density).roundToInt(),
+                rowHeight,
             )
         }
+        this.grabberRow = grabberRow
         val grabberBar = View(context).apply {
             val w = (36 * density).roundToInt()
             val h = (4 * density).roundToInt()
@@ -300,6 +384,23 @@ class SubtitleOverlayController(
             }
         }
         grabberRow.addView(grabberBar)
+
+        val close = TextView(context).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                (26 * density).roundToInt(),
+                rowHeight,
+                Gravity.END or Gravity.CENTER_VERTICAL,
+            )
+            text = "×"
+            textSize = 15f
+            setTextColor(Color.argb(190, 255, 255, 255))
+            gravity = Gravity.CENTER
+            contentDescription = context.getString(R.string.overlay_close)
+            setOnClickListener { onCloseRequested() }
+        }
+        closeButton = close
+        grabberRow.addView(close)
+
         grabberRow.setOnTouchListener(MoveTouchListener())
         column.addView(grabberRow)
 
@@ -395,20 +496,49 @@ class SubtitleOverlayController(
 
         root.addView(column)
 
-        // Resize handle (啾啾)
+        // Resize handle: a short arc hugging the window's bottom-right corner
+        // radius. Larger touch target than the visible arc.
         val handleSize = (22 * density).roundToInt()
-        val handle = View(context).apply {
+        val handle = ArcHandleView(context).apply {
             layoutParams = FrameLayout.LayoutParams(handleSize, handleSize, Gravity.BOTTOM or Gravity.END)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.argb(90, 255, 255, 255))
-            }
         }
         handle.setOnTouchListener(ResizeTouchListener())
         root.addView(handle)
 
+        // Tap anywhere on the captions to reveal the control strip again. The
+        // ScrollViews consume touches themselves, so they need their own listener.
+        val reveal = View.OnClickListener { revealControlsTemporarily() }
+        root.setOnClickListener(reveal)
+        inScroll.setOnClickListener(reveal)
+        outScroll.setOnClickListener(reveal)
+
         applyLayoutMode()
         return root
+    }
+
+    /**
+     * Draws a thin quarter-arc parallel to the window's bottom-right rounded
+     * corner — a subtle "drag diagonally" affordance instead of a big dot.
+     */
+    private class ArcHandleView(context: Context) : View(context) {
+        private val density = context.resources.displayMetrics.density
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            color = Color.argb(165, 255, 255, 255)
+            strokeWidth = 2.2f * density
+        }
+        private val cornerRadius = 12f * density
+        private val arcRadius = 6.5f * density
+
+        override fun onDraw(canvas: Canvas) {
+            // Arc concentric with the window corner: center sits one corner-radius
+            // in from this view's bottom-right corner.
+            val cx = width - cornerRadius
+            val cy = height - cornerRadius
+            val rect = RectF(cx - arcRadius, cy - arcRadius, cx + arcRadius, cy + arcRadius)
+            canvas.drawArc(rect, 0f, 90f, false, paint)
+        }
     }
 
     private fun effectiveBilingual(): Boolean = settings.bilingual && !sameLanguageMode
@@ -543,6 +673,7 @@ class SubtitleOverlayController(
             return try {
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
+                        holdControlsVisible()
                         clampAndApply(persist = false, reason = "move-down")
                         lastX = event.rawX
                         lastY = event.rawY
@@ -574,6 +705,7 @@ class SubtitleOverlayController(
                         // Persist once per gesture. Writing DataStore on MOVE
                         // retriggers settings collection and fights the drag.
                         persistGeometry()
+                        scheduleControlsHide()
                         true
                     }
                     else -> false
@@ -646,6 +778,7 @@ class SubtitleOverlayController(
         private const val MIN_WIDTH_PX = 200
         private const val MIN_HEIGHT_PX = 80
         private const val EDGE_MARGIN_PX = 8
+        private const val CONTROLS_AUTO_HIDE_MS = 5_000L
 
         /**
          * Pure decision: given the current line count, the previous one, and the
