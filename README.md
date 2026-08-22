@@ -1,8 +1,8 @@
 # Live Translate
 
 > [!WARNING]
-> ⚠️ **注意 / NOTE — Google's 10-minute connection limit** ⚠️
-> The Gemini Live API terminates **every WebSocket connection after ~10 minutes**. This is a **Google server-side restriction** ([official docs](https://ai.google.dev/gemini-api/docs/live-api/session-management)), not a bug in this app. When it happens, the app shows "连接中断，正在自动续接…" and **auto-reconnects with session resumption** so captions continue — a brief pause around every 10 minutes is expected behavior.
+> ⚠️ **NOTE — Google's 10-minute connection limit** ⚠️
+> The Gemini Live API terminates **every WebSocket connection after ~10 minutes**. This is a **Google server-side restriction** ([official docs](https://ai.google.dev/gemini-api/docs/live-api/session-management)), not a bug in this app. When it happens, the app shows "Connection lost — resuming automatically…" and **auto-reconnects with session resumption** so captions continue — a brief pause around every 10 minutes is expected behavior.
 
 [中文文档](README.zh-CN.md)
 
@@ -77,7 +77,7 @@ The app can capture **other apps' playback**, the **microphone**, or both, send 
    - **Microphone** if mic is selected  
 6. Play foreign-language media or speak into the mic; the translation appears in the floating window  
 
-After you stop, if there is content, use **Export this session as Markdown** on the subtitles tab (saved under Downloads, e.g. `7月15日-14:30-翻译结果.md`).
+After you stop, if there is content, use **Export this session as Markdown** on the subtitles tab (saved under Downloads, e.g. `Translation-0715-14-30.md`; Chinese-locale devices use a localized name like `7月15日-14:30-翻译结果.md`).
 
 ### 4. Overlay tips
 
