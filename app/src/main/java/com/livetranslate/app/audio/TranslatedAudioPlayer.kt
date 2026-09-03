@@ -8,6 +8,7 @@ import android.util.Log
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
@@ -37,6 +38,9 @@ class TranslatedAudioPlayer {
     /** Written from the event collector thread, read by the writer thread. */
     @Volatile
     private var sampleRate = DEFAULT_SAMPLE_RATE
+
+    // Counter for diagnostics: how many chunks we dropped due to a full queue
+    private val droppedChunks = AtomicInteger(0)
 
     private val writer = thread(
         name = "translated-audio-writer",
@@ -89,6 +93,8 @@ class TranslatedAudioPlayer {
         // Drop oldest if full to avoid unbounded memory / multi-second lag
         while (!queue.offer(chunk.copyOf())) {
             queue.poll()
+            droppedChunks.incrementAndGet()
+            Log.w(TAG, "queue full, dropping oldest chunk (totalDropped=${droppedChunks.get()})")
             if (released.get()) return
         }
     }
@@ -122,23 +128,29 @@ class TranslatedAudioPlayer {
                 val toWrite = applyDigitalGainIfNeeded(chunk)
                 var offset = 0
                 while (offset < toWrite.size && enabled.get() && !released.get()) {
+                    val remaining = toWrite.size - offset
                     val written = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        track.write(toWrite, offset, toWrite.size - offset, AudioTrack.WRITE_NON_BLOCKING)
+                        // Use blocking write on the dedicated writer thread to avoid
+                        // partial/0-length non-blocking writes causing truncation.
+                        try {
+                            track.write(toWrite, offset, remaining, AudioTrack.WRITE_BLOCKING)
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "AudioTrack.write threw", t)
+                            -1
+                        }
                     } else {
-                        track.write(toWrite, offset, toWrite.size - offset)
+                        try {
+                            track.write(toWrite, offset, remaining)
+                        } catch (t: Throwable) {
+                            Log.w(TAG, "AudioTrack.write threw", t)
+                            -1
+                        }
                     }
                     when {
                         written > 0 -> offset += written
                         written == 0 -> {
-                            // Buffer full — brief yield then retry once, then drop rest
+                            // Blocking write shouldn't return 0; if it does, briefly yield.
                             Thread.sleep(5)
-                            val retry = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                track.write(toWrite, offset, toWrite.size - offset, AudioTrack.WRITE_NON_BLOCKING)
-                            } else {
-                                0
-                            }
-                            if (retry <= 0) break
-                            offset += retry
                         }
                         else -> {
                             Log.w(TAG, "AudioTrack.write error=$written, recreating")
@@ -177,8 +189,8 @@ class TranslatedAudioPlayer {
             Log.e(TAG, "invalid min buffer for rate=$rate: $minBuf")
             return null
         }
-        // ~300ms buffer — enough to avoid underruns without huge latency
-        val bufferSize = (minBuf * 3).coerceAtLeast(rate / 3 * 2)
+        // ~500ms buffer — more headroom to avoid underruns on bursty input
+        val bufferSize = (minBuf * 5).coerceAtLeast(rate / 2)
 
         val attrs = AudioAttributes.Builder()
             // Not USAGE_MEDIA: system audio capture matches USAGE_MEDIA and would
@@ -274,7 +286,8 @@ class TranslatedAudioPlayer {
     companion object {
         private const val TAG = "TranslatedAudioPlayer"
         private const val DEFAULT_SAMPLE_RATE = 24_000
-        private const val MAX_QUEUE_CHUNKS = 32
+        // Increase queue capacity to be more resilient to bursty input
+        private const val MAX_QUEUE_CHUNKS = 128
         /** 200% — enough to sit above source video without extreme clipping. */
         const val MAX_VOLUME = 2.0f
         private val STOP_SENTINEL = ByteArray(0)

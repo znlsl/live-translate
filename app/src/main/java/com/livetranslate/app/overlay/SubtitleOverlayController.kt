@@ -418,7 +418,7 @@ class SubtitleOverlayController(
 
         val bg = GradientDrawable().apply {
             cornerRadius = 12 * density
-            setColor(Color.argb((settings.backgroundAlpha * 255).toInt().coerceIn(25, 242), 0, 0, 0))
+            setColor(Color.argb((settings.backgroundAlpha * 255).toInt().coerceIn(0, 242), 0, 0, 0))
         }
         root.background = bg
         val padH = (10 * density).roundToInt()
@@ -682,7 +682,7 @@ class SubtitleOverlayController(
     }
 
     private fun applySettingsToViews() {
-        val alpha = (settings.backgroundAlpha * 255).toInt().coerceIn(25, 242)
+        val alpha = (settings.backgroundAlpha * 255).toInt().coerceIn(0, 242)
         (rootView?.background as? GradientDrawable)?.setColor(Color.argb(alpha, 0, 0, 0))
         inputView?.setTextSize(TypedValue.COMPLEX_UNIT_SP, settings.fontSizeSp * 0.9f)
         outputView?.setTextSize(TypedValue.COMPLEX_UNIT_SP, settings.fontSizeSp)

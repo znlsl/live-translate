@@ -297,7 +297,7 @@ fun SettingsScreen(
                 Slider(
                     value = settings.backgroundAlpha,
                     onValueChange = { a -> viewModel.update { it.copy(backgroundAlpha = a) } },
-                    valueRange = 0.1f..0.95f,
+                    valueRange = 0f..0.95f,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
