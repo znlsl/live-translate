@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -24,6 +26,36 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Signing must be deterministic across CI runs (fresh VMs regenerate a
+    // random debug keystore each run, which forces users to uninstall before
+    // every update), but the real keystore must not live in the repo. It is
+    // provided via Gradle properties — CI decodes the SIGNING_KEYSTORE secret
+    // and passes -P flags; local builds read local.properties. Without any,
+    // builds fall back to the machine debug keystore: fine for development,
+    // but those APKs cannot upgrade over CI-signed ones. See README "Signing".
+    val keystoreProperties = Properties().apply {
+        rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+    }
+    fun signingProp(name: String): String? =
+        (findProperty(name) as String?)?.takeIf { it.isNotBlank() } ?: keystoreProperties.getProperty(name)
+    fun requiredSigningProp(name: String): String =
+        signingProp(name)
+            ?: error("Missing signing property $name. Set KEYSTORE_FILE + $name (+ KEY_ALIAS / KEY_PASSWORD) in local.properties or pass them as -P flags. See README \"Signing\".")
+
+    signingConfigs {
+        signingProp("KEYSTORE_FILE")?.let { storePath ->
+            create("app") {
+                storeFile = rootProject.file(storePath)
+                storePassword = requiredSigningProp("KEYSTORE_PASSWORD")
+                keyAlias = requiredSigningProp("KEY_ALIAS")
+                keyPassword = signingProp("KEY_PASSWORD") ?: storePassword
+            }
+        }
+    }
+    if (signingConfigs.findByName("app") == null) {
+        logger.warn("live-translate: KEYSTORE_FILE is not configured — APKs will be signed with the machine debug keystore and cannot install over CI-signed builds. See README \"Signing\".")
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -31,13 +63,12 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
-            // Open-source CI: ship an installable APK with the debug keystore
-            // until a real upload key is provided via secrets.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("app") ?: signingConfigs.getByName("debug")
         }
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.findByName("app") ?: signingConfigs.getByName("debug")
         }
     }
 

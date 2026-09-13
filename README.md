@@ -53,6 +53,7 @@ The app can capture **other apps' playback**, the **microphone**, or both, send 
 ### 1. Install
 
 - Install a release build from [GitHub Releases](../../releases) when available
+- Releases up to and including **v0.4.2** were signed with a per-build debug keystore, so they can't be upgraded in place: uninstall the old version once before installing a newer release — after that, every new release installs straight over the previous one
 - Or build a debug APK locally (see [Build](#build))
 
 ### 2. Configure API

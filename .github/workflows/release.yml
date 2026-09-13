@@ -21,6 +21,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Fresh CI VMs regenerate a random debug keystore per run, which gives
+      # every release a different signature and forces users to uninstall
+      # before each update. Restore the stable keystore from secrets instead.
+      # Secrets: SIGNING_KEYSTORE (base64 .keystore), SIGNING_KEYSTORE_PASSWORD,
+      # SIGNING_KEY_ALIAS, SIGNING_KEY_PASSWORD.
+      - name: Restore signing keystore
+        env:
+          SIGNING_KEYSTORE: ${{ secrets.SIGNING_KEYSTORE }}
+        run: |
+          if [ -z "$SIGNING_KEYSTORE" ]; then
+            echo "::error::Secret SIGNING_KEYSTORE is not set. Add repo secrets: SIGNING_KEYSTORE (base64-encoded keystore), SIGNING_KEYSTORE_PASSWORD, SIGNING_KEY_ALIAS, SIGNING_KEY_PASSWORD."
+            exit 1
+          fi
+          printf '%s' "$SIGNING_KEYSTORE" | base64 -d > "$RUNNER_TEMP/live-translate.keystore"
+
       - name: Parse version from tag
         id: ver
         run: |
@@ -54,10 +69,18 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build release APK
+        env:
+          SIGNING_KEYSTORE_PASSWORD: ${{ secrets.SIGNING_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
           ./gradlew :app:assembleRelease \
             -PVERSION_NAME="${{ steps.ver.outputs.version_name }}" \
             -PVERSION_CODE="${{ steps.ver.outputs.version_code }}" \
+            -PKEYSTORE_FILE="$RUNNER_TEMP/live-translate.keystore" \
+            -PKEYSTORE_PASSWORD="$SIGNING_KEYSTORE_PASSWORD" \
+            -PKEY_ALIAS="$SIGNING_KEY_ALIAS" \
+            -PKEY_PASSWORD="$SIGNING_KEY_PASSWORD" \
             --stacktrace
 
       - name: Locate APK
@@ -67,6 +90,12 @@ jobs:
           echo "path=${APK}" >> "$GITHUB_OUTPUT"
           ls -lh "$APK"
           cp "$APK" "LiveTranslate-${{ steps.ver.outputs.version_name }}.apk"
+
+      # Print the signing certificate so every release shows its identity in
+      # the run log; compare against the SHA-256 documented in the README.
+      - name: Verify signing certificate
+        run: |
+          "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --print-certs "${{ steps.apk.outputs.path }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
